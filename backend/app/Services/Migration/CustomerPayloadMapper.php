@@ -9,48 +9,37 @@ class CustomerPayloadMapper
     public function mapCustomer(array $customer, ?Shop $shop = null): array
     {
         $email = (string) ($customer['email'] ?? '');
-        $firstName = (string) ($customer['firstName'] ?? '');
-        $lastName = (string) ($customer['lastName'] ?? '');
-        $rawPhone = (string) ($customer['defaultBillingAddress']['phoneNumber'] ?? '');
-        $assignments = $shop ? app(StateAssignmentMapper::class) : null;
-        $salutationKey = $this->salutationKey($customer);
-        $salutationDisplayName = (string) data_get($customer, 'salutation.translated.displayName',
-            data_get($customer, 'salutation.displayName', ''));
-        $mappedSalutation = ($shop && $assignments) ? $assignments->mappedValue($shop, 'salutations', $salutationKey) : null;
+        $firstName = (string) ($customer['firstname'] ?? '');
+        $lastName = (string) ($customer['lastname'] ?? '');
+
+        // Resolve phone number from default billing address or first address
+        $rawPhone = '';
+        $addresses = $customer['addresses'] ?? [];
+        if (is_array($addresses) && count($addresses) > 0) {
+            foreach ($addresses as $addr) {
+                if (!empty($addr['default_billing']) || !empty($addr['default_shipping'])) {
+                    $rawPhone = (string) ($addr['telephone'] ?? '');
+                    break;
+                }
+            }
+            if ($rawPhone === '') {
+                $rawPhone = (string) ($addresses[0]['telephone'] ?? '');
+            }
+        }
 
         $noteParts = [];
-        $customerNumber = (string) ($customer['customerNumber'] ?? '');
-        if ($customerNumber !== '') {
-            $noteParts[] = 'Shopware customerNumber: '.$customerNumber;
+        $customerId = (string) ($customer['id'] ?? '');
+        if ($customerId !== '') {
+            $noteParts[] = 'Magento customer ID: ' . $customerId;
         }
-        $birthday = (string) ($customer['birthday'] ?? '');
-        if ($birthday !== '') {
-            $noteParts[] = 'Shopware birthday: '.$birthday;
-        }
-        $vatIds = $customer['vatIds'] ?? null;
-        if (is_array($vatIds) && count($vatIds) > 0) {
-            $vatIdsFiltered = array_values(array_filter($vatIds, function ($v) {
-                return is_string($v) && trim($v) !== '';
-            }));
-            if (count($vatIdsFiltered) > 0) {
-                $noteParts[] = 'Shopware VAT IDs: '.implode(', ', $vatIdsFiltered);
-            }
+        $dob = (string) ($customer['dob'] ?? '');
+        if ($dob !== '') {
+            $noteParts[] = 'Magento Date of Birth: ' . $dob;
         }
 
         $phone = $this->normalizeE164Phone($rawPhone);
         if ($phone === null && trim($rawPhone) !== '') {
-            $noteParts[] = 'Shopware phone: '.trim($rawPhone);
-        }
-        // Always store the original Shopware salutation in the note
-        if ($salutationDisplayName !== '') {
-            $noteParts[] = 'Shopware salutation: '.$salutationDisplayName;
-        }
-        // Store the mapped Shopify salutation separately if it differs or is set
-        if (is_string($mappedSalutation) && $mappedSalutation !== '' && $assignments) {
-            $mappedLabel = $assignments->optionLabel('salutations', $mappedSalutation);
-            if ($mappedLabel !== $salutationDisplayName) {
-                $noteParts[] = 'Mapped salutation: '.$mappedLabel;
-            }
+            $noteParts[] = 'Magento phone: ' . trim($rawPhone);
         }
 
         $payload = [
@@ -61,27 +50,17 @@ class CustomerPayloadMapper
             'note' => count($noteParts) > 0 ? implode("\n", $noteParts) : null,
         ];
 
-        $addresses = $this->mapAddresses($customer);
-        if (count($addresses) > 0) {
-            $payload['addresses'] = $addresses;
+        $mappedAddresses = $this->mapAddresses($customer);
+        if (count($mappedAddresses) > 0) {
+            $payload['addresses'] = $mappedAddresses;
         }
 
         $tags = [];
-        $groupName = (string) data_get($customer, 'group.translated.name', data_get($customer, 'group.name', ''));
-        if ($groupName !== '') {
-            $tags[] = 'shopware_group:'.$groupName;
+        $tags[] = 'Magento';
+        if (isset($customer['group_id'])) {
+            $tags[] = 'magento_group_id:' . $customer['group_id'];
         }
-        // Tag with original Shopware salutation display name
-        if ($salutationDisplayName !== '') {
-            $tags[] = 'shopware_salutation:'.$salutationDisplayName;
-        }
-        // Tag with mapped Shopify salutation if different from original
-        if (is_string($mappedSalutation) && $mappedSalutation !== '' && $assignments) {
-            $mappedLabel = $assignments->optionLabel('salutations', $mappedSalutation);
-            if ($mappedLabel !== '' && $mappedLabel !== $salutationDisplayName) {
-                $tags[] = 'shopify_salutation:'.$mappedLabel;
-            }
-        }
+
         if (count($tags) > 0) {
             $payload['tags'] = implode(', ', $tags);
         }
@@ -94,52 +73,16 @@ class CustomerPayloadMapper
     /**
      * @return array<int, array{namespace: string, key: string, type: string, value: string}>
      */
-    public function mapShopwareMetafields(array $customer, ?Shop $shop = null): array
+    public function mapMagentoMetafields(array $customer, ?Shop $shop = null): array
     {
         $out = [];
-        $assignments = $shop ? app(StateAssignmentMapper::class) : null;
 
         $this->pushMetafield($out, 'customer_id', (string) ($customer['id'] ?? ''));
-        $this->pushMetafield($out, 'customer_number', (string) ($customer['customerNumber'] ?? ''));
-        $this->pushMetafield($out, 'active', array_key_exists('active', $customer) ? ((bool) $customer['active'] ? 'true' : 'false') : '');
-
-        $this->pushMetafield($out, 'guest', array_key_exists('guest', $customer) ? ((bool) $customer['guest'] ? 'true' : 'false') : '');
-        $this->pushMetafield($out, 'account_type', (string) ($customer['accountType'] ?? ''));
-        $this->pushMetafield($out, 'birthday', (string) ($customer['birthday'] ?? ''));
-        $this->pushMetafield($out, 'affiliate_code', (string) ($customer['affiliateCode'] ?? ''));
-        $this->pushMetafield($out, 'campaign_code', (string) ($customer['campaignCode'] ?? ''));
-        $this->pushMetafield($out, 'double_opt_in_registration', array_key_exists('doubleOptInRegistration', $customer) ? ((bool) $customer['doubleOptInRegistration'] ? 'true' : 'false') : '');
-        $this->pushMetafield($out, 'double_opt_in_email_sent_date', (string) ($customer['doubleOptInEmailSentDate'] ?? ''));
-        $this->pushMetafield($out, 'double_opt_in_confirm_date', (string) ($customer['doubleOptInConfirmDate'] ?? ''));
-
-        $vatIds = $customer['vatIds'] ?? null;
-        if (is_array($vatIds)) {
-            $vatIdsJson = json_encode($vatIds, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            if (is_string($vatIdsJson) && $vatIdsJson !== '' && $vatIdsJson !== 'null') {
-                $this->pushMetafield($out, 'vat_ids', $vatIdsJson, 'json');
-            }
-        }
-
-        $this->pushMetafield($out, 'created_at', (string) ($customer['createdAt'] ?? ''));
-        $this->pushMetafield($out, 'updated_at', (string) ($customer['updatedAt'] ?? ''));
-        $this->pushMetafield($out, 'last_login', (string) ($customer['lastLogin'] ?? ''));
-
-        $groupId = (string) data_get($customer, 'groupId', '');
-        $groupName = (string) data_get($customer, 'group.translated.name', data_get($customer, 'group.name', ''));
-        $this->pushMetafield($out, 'group_id', $groupId);
-        $this->pushMetafield($out, 'group_name', $groupName);
-
-        $salutationName = (string) data_get($customer, 'salutation.translated.displayName', data_get($customer, 'salutation.displayName', ''));
-        $this->pushMetafield($out, 'salutation', $salutationName);
-
-        $salutationKey = $this->salutationKey($customer);
-        $mappedSalutation = ($shop && $assignments) ? $assignments->mappedValue($shop, 'salutations', $salutationKey) : null;
-        if (is_string($mappedSalutation) && $mappedSalutation !== '') {
-            $this->pushMetafield($out, 'salutation_mapped', $assignments->optionLabel('salutations', $mappedSalutation));
-        }
-
-        $this->pushMetafield($out, 'language_id', (string) ($customer['languageId'] ?? ''));
-        $this->pushMetafield($out, 'sales_channel_id', (string) ($customer['salesChannelId'] ?? ''));
+        $this->pushMetafield($out, 'group_id', (string) ($customer['group_id'] ?? ''));
+        $this->pushMetafield($out, 'dob', (string) ($customer['dob'] ?? ''));
+        $this->pushMetafield($out, 'created_at', (string) ($customer['created_at'] ?? ''));
+        $this->pushMetafield($out, 'updated_at', (string) ($customer['updated_at'] ?? ''));
+        $this->pushMetafield($out, 'store_id', (string) ($customer['store_id'] ?? ''));
 
         $raw = json_encode($customer, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (is_string($raw) && $raw !== '') {
@@ -164,88 +107,53 @@ class CustomerPayloadMapper
         return null;
     }
 
-    private function salutationKey(array $customer): string
-    {
-        $key = (string) (data_get($customer, 'salutation.salutationKey')
-            ?: data_get($customer, 'salutation.technicalName')
-            ?: data_get($customer, 'salutation.translated.letterName')
-            ?: data_get($customer, 'salutation.displayName')
-            ?: data_get($customer, 'salutation.translated.displayName')
-            ?: '');
-
-        return strtolower(trim($key));
-    }
-
     /**
      * @return array<int, array<string, mixed>>
      */
     private function mapAddresses(array $customer): array
     {
         $out = [];
-
-        $ordered = [];
-        $seen = [];
-
-        $defaults = [
-            data_get($customer, 'defaultBillingAddress'),
-            data_get($customer, 'defaultShippingAddress'),
-        ];
-
-        foreach ($defaults as $d) {
-            if (!is_array($d)) {
-                continue;
-            }
-            $id = (string) ($d['id'] ?? '');
-            if ($id !== '' && isset($seen[$id])) {
-                continue;
-            }
-            if ($id !== '') {
-                $seen[$id] = true;
-            }
-            $ordered[] = $d;
-        }
-
         $addresses = $customer['addresses'] ?? [];
-        if (is_array($addresses)) {
-            foreach ($addresses as $a) {
-                if (!is_array($a)) {
-                    continue;
-                }
-                $id = (string) ($a['id'] ?? '');
-                if ($id !== '' && isset($seen[$id])) {
-                    continue;
-                }
-                if ($id !== '') {
-                    $seen[$id] = true;
-                }
-                $ordered[] = $a;
-            }
+        if (!is_array($addresses)) {
+            return [];
         }
 
-        foreach ($ordered as $a) {
+        foreach ($addresses as $a) {
             if (!is_array($a)) {
                 continue;
             }
 
-            $countryIso = (string) data_get($a, 'country.iso', '');
-            if ($countryIso === '') {
-                $countryIso = (string) data_get($a, 'country.iso3', '');
+            $countryIso = (string) ($a['country_id'] ?? '');
+
+            // Region/Province handling
+            $province = '';
+            if (isset($a['region'])) {
+                if (is_array($a['region'])) {
+                    $province = (string) ($a['region']['region'] ?? $a['region']['region_code'] ?? '');
+                } else {
+                    $province = (string) $a['region'];
+                }
             }
 
-            $province = (string) data_get($a, 'countryState.translated.name', data_get($a, 'countryState.name', ''));
-            if ($province === '') {
-                $province = (string) ($a['countryStateName'] ?? '');
+            $street = $a['street'] ?? [];
+            $address1 = '';
+            $address2 = '';
+            if (is_array($street)) {
+                $address1 = (string) ($street[0] ?? '');
+                $address2 = (string) ($street[1] ?? '');
+            } else if (is_string($street)) {
+                $address1 = $street;
             }
 
             $address = [
-                'firstName' => (string) ($a['firstName'] ?? ''),
-                'lastName' => (string) ($a['lastName'] ?? ''),
+                'firstName' => (string) ($a['firstname'] ?? ''),
+                'lastName' => (string) ($a['lastname'] ?? ''),
                 'company' => (string) ($a['company'] ?? ''),
-                'address1' => (string) ($a['street'] ?? ''),
-                'address2' => (string) ($a['additionalAddressLine1'] ?? ''),
-                'zip' => (string) ($a['zipcode'] ?? ''),
+                'address1' => $address1,
+                'address2' => $address2,
+                'zip' => (string) ($a['postcode'] ?? ''),
                 'city' => (string) ($a['city'] ?? ''),
-                'phone' => $this->normalizeE164Phone((string) ($a['phoneNumber'] ?? '')),
+                'phone' => $this->normalizeE164Phone((string) ($a['telephone'] ?? '')),
                 'province' => $province,
                 'countryCode' => $countryIso,
             ];
@@ -279,7 +187,7 @@ class CustomerPayloadMapper
         }
 
         $out[] = [
-            'namespace' => 'shopware',
+            'namespace' => 'magento',
             'key' => $key,
             'type' => $type,
             'value' => $value,

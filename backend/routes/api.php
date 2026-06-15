@@ -10,8 +10,8 @@ use App\Http\Controllers\Api\NewsletterMigrationController;
 use App\Http\Controllers\Api\OrderMigrationController;
 use App\Http\Controllers\Api\QueueHealthController;
 use App\Http\Controllers\Api\StateMappingController;
+use App\Http\Controllers\Api\MagentoConnectionController;
 use App\Http\Controllers\Api\ShopifyController;
-use App\Http\Controllers\Api\ShopwareConnectionController;
 use App\Http\Controllers\Api\MarketMigrationController;
 
 Route::middleware(['shopify.session_token'])->group(function () {
@@ -21,10 +21,10 @@ Route::middleware(['shopify.session_token'])->group(function () {
 
         Route::get('/queue/health', [QueueHealthController::class, 'show']);
 
-        Route::get('/shopware-connection', [ShopwareConnectionController::class, 'show']);
-        Route::post('/shopware-connection', [ShopwareConnectionController::class, 'store']);
-        Route::get('/shopware-languages', [ShopwareConnectionController::class, 'languages']);
-        Route::get('/shopware-sales-channels', [ShopwareConnectionController::class, 'salesChannels']);
+        Route::get('/magento-connection', [MagentoConnectionController::class, 'show']);
+        Route::post('/magento-connection', [MagentoConnectionController::class, 'store']);
+        Route::get('/magento-languages', [MagentoConnectionController::class, 'languages']);
+        Route::get('/magento-store-views', [MagentoConnectionController::class, 'storeViews']);
 
         Route::get('/state-mappings', [StateMappingController::class, 'show']);
         Route::post('/state-mappings', [StateMappingController::class, 'store']);
@@ -32,7 +32,6 @@ Route::middleware(['shopify.session_token'])->group(function () {
 
     Route::middleware(['throttle:migration'])->group(function () {
         Route::get('/migration/runs/{run}/report', [MigrationRunReportController::class, 'download']);
-        Route::get('/migration/runs/{run}/report-pdf', [MigrationRunReportController::class, 'downloadPdf']);
 
         Route::prefix('migration/manufacturers')->group(function () {
             Route::post('/preview', [ManufacturerMigrationController::class, 'preview']);
@@ -50,6 +49,11 @@ Route::middleware(['shopify.session_token'])->group(function () {
             Route::post('/start', [MigrationController::class, 'start']);
             Route::post('/start-filtered', [MigrationController::class, 'startFiltered']);
             Route::post('/cancel', [MigrationController::class, 'cancel']);
+        });
+
+        Route::prefix('migration/collections')->group(function () {
+            Route::post('/redirects/preview', [MigrationController::class, 'previewCollectionRedirects']);
+            Route::post('/redirects/import', [MigrationController::class, 'importCollectionRedirects']);
         });
 
         Route::prefix('migration/customers')->group(function () {

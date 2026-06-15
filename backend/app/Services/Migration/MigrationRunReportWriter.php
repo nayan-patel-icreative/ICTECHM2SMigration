@@ -188,8 +188,8 @@ class MigrationRunReportWriter
     {
         return match ($type) {
             'products' => [
-                'shopware_product_id',
-                'product_number',
+                'magento_product_id',
+                'product_sku',
                 'product_name',
                 'variant_count',
                 'status',
@@ -198,7 +198,7 @@ class MigrationRunReportWriter
                 'migrated_at_utc',
             ],
             'manufacturers' => [
-                'shopware_manufacturer_id',
+                'magento_manufacturer_id',
                 'manufacturer_name',
                 'status',
                 'reason',
@@ -206,15 +206,15 @@ class MigrationRunReportWriter
                 'migrated_at_utc',
             ],
             'markets' => [
-                'shopware_sales_channel_id',
-                'sales_channel_name',
+                'magento_store_view_code',
+                'store_view_name',
                 'status',
                 'reason',
                 'shopify_market_gid',
                 'migrated_at_utc',
             ],
             'customers' => [
-                'shopware_customer_id',
+                'magento_customer_id',
                 'email',
                 'status',
                 'reason',
@@ -222,8 +222,8 @@ class MigrationRunReportWriter
                 'migrated_at_utc',
             ],
             'orders' => [
-                'shopware_order_id',
-                'order_number',
+                'magento_order_id',
+                'order_increment_id',
                 'status',
                 'reason',
                 'shopify_order_id',
@@ -236,8 +236,8 @@ class MigrationRunReportWriter
                 'migrated_at_utc',
             ],
             'discounts' => [
-                'shopware_promotion_id',
-                'promotion_name',
+                'magento_rule_id',
+                'rule_name',
                 'shopify_discount_type',
                 'shopify_discount_gid',
                 'code_count',

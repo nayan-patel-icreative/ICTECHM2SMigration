@@ -21,8 +21,8 @@ class Shop extends Model
         'uninstalled_at' => 'datetime',
     ];
 
-    public function shopwareConnection()
+    public function magentoConnection()
     {
-        return $this->hasOne(ShopwareConnection::class);
+        return $this->hasOne(MagentoConnection::class);
     }
 }

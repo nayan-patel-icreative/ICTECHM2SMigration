@@ -4,7 +4,7 @@ namespace App\Services\Migration;
 
 use App\Http\Controllers\Api\StateMappingController;
 use App\Models\Shop;
-use App\Support\ShopwareStateResolver;
+use App\Support\MagentoStateResolver;
 
 class StateAssignmentMapper
 {
@@ -89,13 +89,17 @@ class StateAssignmentMapper
     }
 
     /**
-     * Resolve Shopify OrderCreate financialStatus from saved state assignments.
+     * Resolve Shopify OrderCreate financialStatus from Magento order data.
+     *
+     * Magento 2 order structure (flat fields):
+     *   - $order['status']  → e.g. "pending", "processing", "complete", "canceled"
+     *   - $order['state']   → e.g. "new", "processing", "complete", "closed", "canceled"
+     *   - $order['payment']['method'] → e.g. "checkmo", "paypal_express", "free"
      *
      * Priority:
-     * 1. Transaction state when it maps to a non-pending financial status (e.g. paid, refunded).
-     * 2. Order state mapping (Assignments → Order States tab).
-     * 3. Transaction state when it maps to pending.
-     * 4. Legacy substring heuristics on raw Shopware transaction states.
+     * 1. Mapped "transaction_state" using the Magento payment method name.
+     * 2. Mapped "order_state" using the Magento order status string.
+     * 3. Fallback heuristics on raw Magento status/payment values.
      */
     public function resolveFinancialStatus(Shop $shop, array $order): string
     {
@@ -154,7 +158,7 @@ class StateAssignmentMapper
             return $fromDelivery;
         }
 
-        // Shopware order search often returns no deliveries[] — use order state as delivery proxy (e.g. open → fulfilled).
+        // Magento order has no separate delivery state[] — use order state as delivery proxy (e.g. open → fulfilled).
         $fromOrderState = $this->fulfillmentFromStateType(
             $shop,
             'delivery_state',
@@ -182,75 +186,89 @@ class StateAssignmentMapper
         return $this->fulfillmentStatusValue($mapped);
     }
 
+    /**
+     * For Magento, the "transaction state" is the payment method name
+     * (e.g. "checkmo", "paypal_express", "free").
+     * This allows store owners to map each payment method to a Shopify financial status.
+     */
     private function firstTransactionState(array $order): string
     {
-        $tx = data_get($order, 'transactions', []);
-        if (!is_array($tx) || !isset($tx[0]) || !is_array($tx[0])) {
-            return '';
+        // Magento: payment method is the closest equivalent to a transaction state.
+        $method = strtolower(trim((string) data_get($order, 'payment.method', '')));
+        if ($method !== '') {
+            return $method;
         }
 
-        return ShopwareStateResolver::technicalName($tx[0]);
+        // Fallback: use order status as payment proxy
+        return MagentoStateResolver::orderStatus($order);
     }
 
+    /**
+     * For Magento, delivery state is derived from whether shipments exist.
+     * Magento ships via shipments[] records; there is no separate delivery state string.
+     */
     private function firstDeliveryState(array $order): string
     {
-        $deliveries = data_get($order, 'deliveries', []);
-        if (!is_array($deliveries) || !isset($deliveries[0]) || !is_array($deliveries[0])) {
+        $shipments = data_get($order, 'extension_attributes.shipping_assignments', []);
+        if (!is_array($shipments) || count($shipments) === 0) {
             return '';
         }
 
-        return ShopwareStateResolver::technicalName($deliveries[0]);
+        // Use order status as the delivery state value since Magento's status
+        // encodes fulfillment info (e.g. "processing", "complete").
+        return MagentoStateResolver::orderStatus($order);
     }
 
+    /**
+     * Magento order state: reads the flat `status` string (most granular),
+     * falling back to the `state` string.
+     */
     private function orderState(array $order): string
     {
-        return ShopwareStateResolver::technicalName($order);
+        return MagentoStateResolver::technicalName($order);
     }
 
+    /**
+     * Fallback heuristics using Magento order status/state strings.
+     */
     private function financialStatusFallbackFromRawStates(array $order): string
     {
-        $tx = data_get($order, 'transactions', []);
-        if (!is_array($tx)) {
-            return 'PENDING';
-        }
+        $status = strtolower(trim((string) data_get($order, 'status', '')));
+        $state  = strtolower(trim((string) data_get($order, 'state', '')));
+        $method = strtolower(trim((string) data_get($order, 'payment.method', '')));
 
-        $states = [];
-        foreach ($tx as $t) {
-            if (!is_array($t)) {
-                continue;
-            }
-            $states[] = ShopwareStateResolver::technicalName($t);
-        }
-        $joined = strtolower(implode('|', array_filter($states)));
+        $joined = $status . '|' . $state . '|' . $method;
 
-        if (str_contains($joined, 'paid') || str_contains($joined, 'completed') || str_contains($joined, 'authorize')) {
+        if (str_contains($joined, 'complete') || str_contains($joined, 'paid')
+            || str_contains($joined, 'processing') || str_contains($joined, 'authorize')) {
             return 'PAID';
         }
 
-        if (str_contains($joined, 'cancel') || str_contains($joined, 'fail')) {
+        if (str_contains($joined, 'free') && (str_contains($joined, 'complete') || str_contains($joined, 'processing'))) {
+            return 'PAID';
+        }
+
+        if (str_contains($joined, 'cancel') || str_contains($joined, 'closed')) {
             return 'VOIDED';
+        }
+
+        if (str_contains($joined, 'refund')) {
+            return 'REFUNDED';
         }
 
         return 'PENDING';
     }
 
+    /**
+     * Fallback heuristics for Magento fulfillment based on order status/state.
+     */
     private function fulfillmentFallbackFromRawStates(array $order): ?string
     {
-        $deliveries = data_get($order, 'deliveries', []);
-        if (!is_array($deliveries)) {
-            return null;
-        }
+        $status = strtolower(trim((string) data_get($order, 'status', '')));
+        $state  = strtolower(trim((string) data_get($order, 'state', '')));
+        $joined = $status . '|' . $state;
 
-        $states = [];
-        foreach ($deliveries as $delivery) {
-            if (!is_array($delivery)) {
-                continue;
-            }
-            $states[] = ShopwareStateResolver::technicalName($delivery);
-        }
-        $joined = strtolower(implode('|', array_filter($states)));
-
-        if (str_contains($joined, 'shipped') || str_contains($joined, 'delivered')) {
+        if (str_contains($joined, 'complete') || str_contains($joined, 'shipped')) {
             return 'FULFILLED';
         }
 
@@ -258,7 +276,7 @@ class StateAssignmentMapper
             return 'PARTIAL';
         }
 
-        if (str_contains($joined, 'cancel') || str_contains($joined, 'returned')) {
+        if (str_contains($joined, 'cancel') || str_contains($joined, 'closed')) {
             return 'RESTOCKED';
         }
 

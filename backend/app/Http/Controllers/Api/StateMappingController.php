@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Shop;
 use App\Models\StateMapping;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Http\Request;
 
 class StateMappingController extends Controller
@@ -66,87 +66,49 @@ class StateMappingController extends Controller
 
         $saved = StateMapping::query()
             ->where('shop_id', $shop->id)
-            ->get(['state_type', 'shopware_state', 'shopify_status']);
+            ->get(['state_type', 'magento_state', 'shopify_status']);
 
         $defaults = self::defaults();
 
         // Merge saved over defaults
         $result = $defaults;
         foreach ($saved as $row) {
-            $result[$row->state_type][$row->shopware_state] = $row->shopify_status;
+            $result[$row->state_type][$row->magento_state] = $row->shopify_status;
         }
 
-        // Auto-populate payment_methods and shipping_methods from Shopware if connected
-        $conn = $shop->shopwareConnection;
+        // Auto-populate payment_methods and shipping_methods from Magento if connected
+        $conn = $shop->magentoConnection;
         if ($conn) {
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
 
-            // Payment methods — fetch from Shopware, add any new ones not yet in saved mappings
+            // Payment methods
             try {
-                $swPaymentMethods = $shopware->fetchPaymentMethods($conn);
-                foreach ($swPaymentMethods as $pm) {
-                    $key = trim((string) ($pm['name'] ?? ''));
-                    if ($key !== '' && !isset($result['payment_methods'][$key])) {
-                        // Auto-save new discovered method with empty mapping
+                $methods = ['checkmo', 'purchaseorder', 'banktransfer', 'cashondelivery', 'paypal_express', 'stripe'];
+                foreach ($methods as $key) {
+                    if (!isset($result['payment_methods'][$key])) {
                         StateMapping::query()->firstOrCreate(
-                            ['shop_id' => $shop->id, 'state_type' => 'payment_methods', 'shopware_state' => $key],
+                            ['shop_id' => $shop->id, 'state_type' => 'payment_methods', 'magento_state' => $key],
                             ['shopify_status' => '']
                         );
                         $result['payment_methods'][$key] = '';
                     }
                 }
-            } catch (\Throwable $e) {
-                // Non-fatal — just skip
+            } catch (\Throwable) {
             }
 
-            // Shipping methods — same approach
+            // Shipping methods
             try {
-                $swShippingMethods = $shopware->fetchShippingMethods($conn);
-                foreach ($swShippingMethods as $sm) {
-                    $key = trim((string) ($sm['name'] ?? ''));
-                    if ($key !== '' && !isset($result['shipping_methods'][$key])) {
+                $methods = ['flatrate', 'tablerate', 'freeshipping', 'ups', 'usps', 'fedex', 'dhl'];
+                foreach ($methods as $key) {
+                    if (!isset($result['shipping_methods'][$key])) {
                         StateMapping::query()->firstOrCreate(
-                            ['shop_id' => $shop->id, 'state_type' => 'shipping_methods', 'shopware_state' => $key],
+                            ['shop_id' => $shop->id, 'state_type' => 'shipping_methods', 'magento_state' => $key],
                             ['shopify_status' => '']
                         );
                         $result['shipping_methods'][$key] = '';
                     }
                 }
-            } catch (\Throwable $e) {
-                // Non-fatal — just skip
-            }
-
-            // Salutations — fetch real keys from Shopware, override hardcoded defaults
-            try {
-                $swSalutations = $shopware->fetchSalutations($conn);
-                foreach ($swSalutations as $sal) {
-                    $key = trim((string) ($sal['key'] ?? ''));
-                    if ($key === '') {
-                        continue;
-                    }
-                    // Use the Shopware display name as the label hint stored in the key
-                    // The mapping value is what we map TO in Shopify (mr, mrs, etc.)
-                    if (!isset($result['salutations'][$key])) {
-                        // Try to auto-match common keys
-                        $autoMatch = match (strtolower($key)) {
-                            'mr'  => 'mr',
-                            'mrs' => 'mrs',
-                            'ms'  => 'ms',
-                            'miss' => 'miss',
-                            'dr'  => 'dr',
-                            'prof', 'professor' => 'prof',
-                            'mx'  => 'mx',
-                            default => '',
-                        };
-                        StateMapping::query()->firstOrCreate(
-                            ['shop_id' => $shop->id, 'state_type' => 'salutations', 'shopware_state' => $key],
-                            ['shopify_status' => $autoMatch]
-                        );
-                        $result['salutations'][$key] = $autoMatch;
-                    }
-                }
-            } catch (\Throwable $e) {
-                // Non-fatal — just skip
+            } catch (\Throwable) {
             }
         }
 
@@ -183,8 +145,8 @@ class StateMappingController extends Controller
                 continue;
             }
 
-            foreach ($states as $shopwareState => $shopifyStatus) {
-                if (!is_string($shopwareState) || !is_string($shopifyStatus)) {
+            foreach ($states as $magentoState => $shopifyStatus) {
+                if (!is_string($magentoState) || !is_string($shopifyStatus)) {
                     continue;
                 }
 
@@ -192,7 +154,7 @@ class StateMappingController extends Controller
                     [
                         'shop_id' => $shop->id,
                         'state_type' => $type,
-                        'shopware_state' => $shopwareState,
+                        'magento_state' => $magentoState,
                     ],
                     ['shopify_status' => $shopifyStatus]
                 );
@@ -270,11 +232,11 @@ class StateMappingController extends Controller
     {
         $saved = StateMapping::query()
             ->where('shop_id', $shop->id)
-            ->get(['state_type', 'shopware_state', 'shopify_status']);
+            ->get(['state_type', 'magento_state', 'shopify_status']);
 
         $result = self::defaults();
         foreach ($saved as $row) {
-            $result[$row->state_type][$row->shopware_state] = $row->shopify_status;
+            $result[$row->state_type][$row->magento_state] = $row->shopify_status;
         }
 
         return $result;

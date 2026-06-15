@@ -7,7 +7,7 @@ use App\Models\Shop;
 use App\Services\Migration\ManufacturerFingerprint;
 use App\Services\Migration\ManufacturerMigrationService;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Http\Request;
 
 class ManufacturerMigrationController extends Controller
@@ -23,10 +23,10 @@ class ManufacturerMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (! $shop || ! $conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -37,10 +37,10 @@ class ManufacturerMigrationController extends Controller
         $limit = (int) ($validated['limit'] ?? 10);
         $page = (int) ($validated['page'] ?? 1);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $fingerprints = app(ManufacturerFingerprint::class);
 
-        $res = $shopware->searchManufacturers($conn, 50, $page);
+        $res = $magento->searchManufacturers($conn, 50, $page);
         $rows = $res['manufacturers'] ?? [];
 
         $items = [];
@@ -52,12 +52,12 @@ class ManufacturerMigrationController extends Controller
             if ($sourceId === '') {
                 continue;
             }
-            $name = trim((string) (data_get($m, 'translated.name') ?: data_get($m, 'name') ?: ''));
+            $name = trim((string) (data_get($m, 'name') ?: ''));
             $items[] = [
                 'source_id' => $sourceId,
                 'name' => $name,
                 'vendor' => $name,
-                'has_media' => trim((string) (data_get($m, 'mediaId') ?: data_get($m, 'coverId') ?: '')) !== '',
+                'has_media' => false,
                 'fingerprint' => $fingerprints->make($m),
             ];
         }
@@ -115,8 +115,7 @@ class ManufacturerMigrationController extends Controller
                 'duration_seconds' => $durationSeconds,
                 'report_available' => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/' . $run->id . '/report',
-                'pdf_available' => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url' => '/api/migration/runs/' . $run->id . '/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
         ]);

@@ -11,7 +11,7 @@ use App\Services\Migration\CustomerPayloadMapper;
 use App\Services\Migration\ShopifyCustomerSyncService;
 use App\Services\Migration\ShopifyTranslationSyncService;
 use App\Services\Shopify\ShopifyAdminGraphqlClient;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -47,7 +47,7 @@ class RunCustomerMigrationJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (!$run) {
             return;
         }
@@ -58,7 +58,7 @@ class RunCustomerMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (!$shop || !$conn) {
                 $run->status = 'failed';
@@ -70,7 +70,7 @@ class RunCustomerMigrationJob implements ShouldQueue
             $run->status = 'running';
             $run->save();
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
             $mapper = app(CustomerPayloadMapper::class);
             $fingerprints = app(CustomerFingerprint::class);
             $sync = app(ShopifyCustomerSyncService::class);
@@ -82,18 +82,7 @@ class RunCustomerMigrationJob implements ShouldQueue
                 return;
             }
 
-            // --- Sales Channel scoping (multi-store support) ---
-            $scopedFilter   = $this->filter;
-            $salesChannelId = trim((string) ($conn->sales_channel_id ?? ''));
-            if ($salesChannelId !== '') {
-                $scopedFilter[] = [
-                    'type'  => 'equals',
-                    'field' => 'salesChannelId',
-                    'value' => $salesChannelId,
-                ];
-            }
-
-            $res = $shopware->searchCustomers($conn, $perPage, $this->page, $scopedFilter);
+            $res = $magento->searchCustomers($conn, $perPage, $this->page, $this->filter);
             $customers = $res['customers'] ?? [];
             $total = (int) ($res['total'] ?? 0);
 
@@ -152,24 +141,7 @@ class RunCustomerMigrationJob implements ShouldQueue
                 try {
                     $customerLocale = '';
                     $customerLangName = '';
-                    $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                    if (count($enabledLanguages) > 0) {
-                        $customerLangId = trim((string) ($c['languageId'] ?? ''));
-                        if ($customerLangId !== '') {
-                            $matched = array_filter($enabledLanguages, fn ($l) => ($l['id'] ?? '') === $customerLangId);
-                            $matched = array_values($matched);
-                            if (count($matched) > 0) {
-                                $customerLocale = (string) $matched[0]['locale'];
-                                $customerLangName = (string) ($matched[0]['name'] ?? '');
-                            }
-                        }
-                    }
-                    if ($customerLocale === '') {
-                        $customerLocale = trim((string) ($c['language']['locale']['code'] ?? $c['language']['locale'] ?? ''));
-                    }
-                    if ($customerLangName === '') {
-                        $customerLangName = trim((string) ($c['language']['name'] ?? ''));
-                    }
+                    $enabledLanguages = [];
 
                     $payload = $mapper->mapCustomer($c, $shop);
                     if ($customerLocale !== '') {
@@ -177,7 +149,7 @@ class RunCustomerMigrationJob implements ShouldQueue
                     }
                     $fp = $fingerprints->make($payload);
 
-                    $metafields = $mapper->mapShopwareMetafields($c, $shop);
+                    $metafields = $mapper->mapMagentoMetafields($c, $shop);
                     if (is_array($metafields) && count($metafields) > 0) {
                         $payload['__metafields'] = $metafields;
                     }
@@ -339,7 +311,7 @@ GQL;
         try {
             $writer = app(MigrationRunReportWriter::class);
             $writer->appendRow($run, [
-                'shopware_customer_id' => (string) $item->source_id,
+                'magento_customer_id' => (string) $item->source_id,
                 'email' => (string) ($customer['email'] ?? ''),
                 'status' => $status,
                 'reason' => $status === 'failed'

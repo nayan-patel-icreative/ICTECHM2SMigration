@@ -8,7 +8,7 @@ use App\Models\ShopifyIdMapping;
 use App\Services\Migration\ManufacturerFingerprint;
 use App\Services\Migration\MigrationRunReportWriter;
 use App\Services\Migration\ShopifyTranslationSyncService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -38,13 +38,13 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run || in_array($run->status, ['cancelled', 'finished', 'failed'], true)) {
             return;
         }
 
         $shop = $run->shop;
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
         if (! $shop || ! $conn || $this->sourceId === '') {
             return;
         }
@@ -67,24 +67,25 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
         $item->save();
 
         try {
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
             $fingerprints = app(ManufacturerFingerprint::class);
 
-            $res = $shopware->searchManufacturers($conn, 1, 1, [
-                [
-                    'type'  => 'equals',
-                    'field' => 'id',
-                    'value' => $this->sourceId,
-                ],
-            ], ['translations' => []]);
-            $manufacturer = data_get($res, 'manufacturers.0');
+            $res = $magento->searchManufacturers($conn, 2000, 1);
+            $manufacturer = null;
+            foreach ($res['manufacturers'] ?? [] as $m) {
+                if (($m['id'] ?? '') === $this->sourceId) {
+                    $manufacturer = $m;
+                    break;
+                }
+            }
             if (! is_array($manufacturer)) {
-                $this->markFailed($run, $item, 'Shopware manufacturer not found');
+                $this->markFailed($run, $item, 'Magento manufacturer not found');
 
                 return;
             }
 
-            $vendorName = trim((string) (data_get($manufacturer, 'translated.name') ?: data_get($manufacturer, 'name') ?: ''));
+            $vendorName = trim((string) ($manufacturer['name'] ?? ''));
+
             if ($vendorName === '') {
                 $this->markFailed($run, $item, 'Manufacturer has no name');
 
@@ -100,7 +101,7 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
                 $item->save();
                 try {
                     app(MigrationRunReportWriter::class)->appendRow($run, [
-                        'shopware_manufacturer_id' => $item->source_id,
+                        'magento_manufacturer_id' => $item->source_id,
                         'manufacturer_name' => $vendorName,
                         'status' => 'skipped',
                         'reason' => 'No changes detected (fingerprint matched)',
@@ -124,20 +125,7 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
                 'shopify_gid' => $vendorName,
             ]);
 
-            // --- Non-blocking: store manufacturer translations in item context ---
-            // Shopify vendors are plain strings (not GIDs), so we can't use translationsRegister.
-            // We store the translated names in migration_items.error_context for reference.
-            try {
-                $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                if (count($enabledLanguages) > 0) {
-                    $translationsByLocale = ShopifyTranslationSyncService::extractTranslationsFromEntity($manufacturer, $enabledLanguages);
-                    if (count($translationsByLocale) > 0) {
-                        $item->error_context = ['manufacturer_translations' => $translationsByLocale];
-                    }
-                }
-            } catch (\Throwable) {
-                // Non-fatal — never block manufacturer migration
-            }
+            // Magento translations handled per product.
 
             $item->status = 'succeeded';
             $item->fingerprint = $fp;
@@ -145,7 +133,7 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
             $item->save();
             try {
                 app(MigrationRunReportWriter::class)->appendRow($run, [
-                    'shopware_manufacturer_id' => $item->source_id,
+                    'magento_manufacturer_id' => $item->source_id,
                     'manufacturer_name' => $vendorName,
                     'status' => 'succeeded',
                     'reason' => '',
@@ -211,7 +199,7 @@ class ProcessManufacturerMigrationItemJob implements ShouldQueue
         try {
             $writer = app(MigrationRunReportWriter::class);
             $writer->appendRow($run, [
-                'shopware_manufacturer_id' => $item->source_id,
+                'magento_manufacturer_id' => $item->source_id,
                 'manufacturer_name' => '',
                 'status' => 'failed',
                 'reason' => $writer->humanizeFailureReason($item),

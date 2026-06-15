@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\MigrationRun;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,7 +41,7 @@ class RunOrderMigrationJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (!$run) {
             return;
         }
@@ -52,7 +52,7 @@ class RunOrderMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (!$shop || !$conn) {
                 $run->status = 'failed';
@@ -64,7 +64,7 @@ class RunOrderMigrationJob implements ShouldQueue
             $run->status = 'running';
             $run->save();
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
 
             $perPage = 50;
 
@@ -73,18 +73,7 @@ class RunOrderMigrationJob implements ShouldQueue
                 return;
             }
 
-            // --- Sales Channel scoping (multi-store support) ---
-            $scopedFilter   = $this->filter;
-            $salesChannelId = trim((string) ($conn->sales_channel_id ?? ''));
-            if ($salesChannelId !== '') {
-                $scopedFilter[] = [
-                    'type'  => 'equals',
-                    'field' => 'salesChannelId',
-                    'value' => $salesChannelId,
-                ];
-            }
-
-            $res = $shopware->searchOrders($conn, $perPage, $this->page, $scopedFilter);
+            $res = $magento->searchOrders($conn, $perPage, $this->page, $this->filter);
             $orders = $res['orders'] ?? [];
             $total = (int) ($res['total'] ?? 0);
 

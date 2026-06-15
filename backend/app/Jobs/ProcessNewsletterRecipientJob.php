@@ -9,7 +9,7 @@ use App\Services\Migration\NewsletterRecipientFingerprint;
 use App\Services\Migration\NewsletterRecipientPayloadMapper;
 use App\Services\Migration\ShopifyNewsletterSyncService;
 use App\Services\Migration\ShopifyTranslationSyncService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -44,7 +44,7 @@ class ProcessNewsletterRecipientJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (!$run) {
             return;
         }
@@ -99,16 +99,15 @@ class ProcessNewsletterRecipientJob implements ShouldQueue
             $isActive = $mapper->isActiveRecipient($this->recipient);
             $payload = $mapper->mapToShopifyCustomerPayload($this->recipient, $isActive, $shop);
 
-            // Resolve recipient locale code from enabled languages config
             $recipientLocale = '';
-            if ($shop->shopwareConnection) {
-                $enabledLanguages = ShopwareClient::enabledLanguages($shop->shopwareConnection);
-                $recipientLangId = trim((string) ($this->recipient['languageId'] ?? ''));
-                if ($recipientLangId !== '') {
-                    $matched = array_filter($enabledLanguages, fn ($l) => ($l['id'] ?? '') === $recipientLangId);
-                    $matched = array_values($matched);
-                    if (count($matched) > 0) {
-                        $recipientLocale = (string) $matched[0]['locale'];
+            if ($shop->magentoConnection) {
+                $magento = app(MagentoClient::class);
+                $storeViews = $magento->getStoreViews($shop->magentoConnection);
+                $storeId = trim((string) ($this->recipient['salesChannelId'] ?? ''));
+                foreach ($storeViews as $sv) {
+                    if ($sv['id'] === $storeId) {
+                        $recipientLocale = $sv['locale'] ?? '';
+                        break;
                     }
                 }
             }
@@ -164,22 +163,20 @@ class ProcessNewsletterRecipientJob implements ShouldQueue
             // --- Non-blocking: store newsletter recipient language preference ---
             if ($gid !== '') {
                 try {
-                    $conn = $shop->shopwareConnection;
+                    $conn = $shop->magentoConnection;
                     if ($conn) {
-                        $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                        if (count($enabledLanguages) > 0) {
-                            $recipientLangId = trim((string) ($this->recipient['languageId'] ?? ''));
-                            if ($recipientLangId !== '') {
-                                $matched = array_filter($enabledLanguages, fn ($l) => ($l['id'] ?? '') === $recipientLangId);
-                                $matched = array_values($matched);
-                                if (count($matched) > 0) {
-                                    $translationSync = app(ShopifyTranslationSyncService::class);
-                                    $translationSync->storeLanguagePreferenceMetafield(
-                                        $shop, $gid,
-                                        (string) $matched[0]['locale'],
-                                        (string) ($matched[0]['name'] ?? '')
-                                    );
-                                }
+                        $magento = app(MagentoClient::class);
+                        $storeViews = $magento->getStoreViews($conn);
+                        $storeId = trim((string) ($this->recipient['salesChannelId'] ?? ''));
+                        foreach ($storeViews as $sv) {
+                            if ($sv['id'] === $storeId) {
+                                $translationSync = app(ShopifyTranslationSyncService::class);
+                                $translationSync->storeLanguagePreferenceMetafield(
+                                    $shop, $gid,
+                                    $sv['locale'],
+                                    $sv['name']
+                                );
+                                break;
                             }
                         }
                     }

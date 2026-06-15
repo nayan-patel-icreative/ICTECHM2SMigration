@@ -8,14 +8,15 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('shopware_connections', function (Blueprint $table) {
+        Schema::create('magento_connections', function (Blueprint $table) {
             $table->id();
             $table->foreignId('shop_id')->constrained('shops')->cascadeOnDelete();
             $table->string('api_url');
-            $table->text('client_id');
-            $table->text('client_secret');
             $table->text('access_token')->nullable();
-            $table->timestamp('token_expires_at')->nullable();
+            $table->string('store_view_code')->nullable();
+            $table->string('store_view_name')->nullable();
+            $table->json('language_config')->nullable();
+            $table->string('files_path')->nullable();
             $table->timestamps();
             $table->unique('shop_id');
         });
@@ -23,6 +24,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('shopware_connections');
+        Schema::dropIfExists('magento_connections');
     }
 };

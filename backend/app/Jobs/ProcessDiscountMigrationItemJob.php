@@ -10,7 +10,7 @@ use App\Services\Migration\DiscountMapper;
 use App\Services\Migration\MigrationRunReportWriter;
 use App\Services\Migration\ShopifyTranslationSyncService;
 use App\Services\Shopify\ShopifyAdminGraphqlClient;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -40,13 +40,13 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run || in_array($run->status, ['cancelled', 'finished', 'failed'], true)) {
             return;
         }
 
         $shop = $run->shop;
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
         if (! $shop || ! $conn || $this->sourceId === '') {
             return;
         }
@@ -69,36 +69,29 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
         $item->save();
 
         try {
-            $shopware     = app(ShopwareClient::class);
+            $magento      = app(MagentoClient::class);
             $fingerprints = app(DiscountFingerprint::class);
             $mapper       = app(DiscountMapper::class);
             $graphql      = app(ShopifyAdminGraphqlClient::class);
 
             // Fetch single promotion by ID
-            $res = $shopware->fetchPromotions($conn, 1, 1, [
-                ['type' => 'equals', 'field' => 'id', 'value' => $this->sourceId],
-            ]);
-            $promotion = data_get($res, 'promotions.0');
+            $promotion = $magento->fetchSalesRule($conn, $this->sourceId);
 
-            if (! is_array($promotion)) {
-                $this->markFailed($run, $item, 'Shopware promotion not found');
+            if (! is_array($promotion) || empty($promotion)) {
+                $this->markFailed($run, $item, 'Magento sales rule not found');
 
                 return;
             }
 
-            $promotionName = trim((string) (data_get($promotion, 'name') ?: ''));
+            $promotionName = trim((string) ($promotion['name'] ?? ''));
 
-            // Debug: log the promotion structure to understand what associations loaded
+
+
+            // Debug: log the promotion structure
             Log::debug('Discount migration: promotion data loaded', [
                 'run_id'         => $run->id,
                 'source_id'      => $this->sourceId,
                 'name'           => $promotionName,
-                'has_discounts'  => is_array(data_get($promotion, 'discounts')),
-                'discount_count' => count((array) data_get($promotion, 'discounts', [])),
-                'discount_type'  => data_get($promotion, 'discounts.0.type'),
-                'discount_value' => data_get($promotion, 'discounts.0.value'),
-                'has_codes'      => is_array(data_get($promotion, 'codes')) || is_array(data_get($promotion, 'individualCodes')),
-                'code_count'     => count((array) (data_get($promotion, 'individualCodes') ?? data_get($promotion, 'codes', []))),
             ]);
 
             // Fingerprint check
@@ -132,6 +125,8 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
             $extraCodes = $variables['_extra_codes'] ?? [];
             $metafields = $variables['_metafields'] ?? [];
             unset($variables['_extra_codes'], $variables['_metafields']);
+
+
 
             // Determine create vs update
             $existingGid = $this->existingShopifyGid($shop->id, $this->sourceId);
@@ -222,11 +217,11 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
 
             try {
                 app(MigrationRunReportWriter::class)->appendRow($run, [
-                    'shopware_promotion_id' => $item->source_id,
+                    'magento_promotion_id'  => $item->source_id,
                     'promotion_name'        => $promotionName,
                     'shopify_discount_type' => $this->discountTypeLabel($createMutation),
                     'shopify_discount_gid'  => $shopifyGid ?? '',
-                    'code_count'            => count((array) (data_get($promotion, 'individualCodes') ?? data_get($promotion, 'codes', []))),
+                    'code_count'            => isset($promotion['coupon_code']) ? 1 : 0,
                     'status'                => 'succeeded',
                     'reason'                => '',
                     'migrated_at_utc'       => $item->finished_at ? $item->finished_at->toDateTimeString() : '',
@@ -237,23 +232,7 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
 
             $this->incrementRunCounters($run->id, ['processed' => 1, 'succeeded' => 1]);
 
-            // --- Non-blocking: store language context metafield on the discount ---
-            if ($shopifyGid !== null && $shopifyGid !== '') {
-                try {
-                    $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                    if (count($enabledLanguages) > 0) {
-                        $locales = array_map(fn ($l) => $l['locale'], $enabledLanguages);
-                        $translationSync = app(ShopifyTranslationSyncService::class);
-                        $translationSync->storeLanguagePreferenceMetafield(
-                            $shop, $shopifyGid,
-                            implode(',', $locales),
-                            'migration_languages'
-                        );
-                    }
-                } catch (\Throwable) {
-                    // Non-fatal — discount migration already succeeded
-                }
-            }
+            // Languages handled directly.
         } catch (\Throwable $e) {
             Log::error('Discount migration item failed', [
                 'run_id'    => $run->id,
@@ -571,7 +550,7 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
         try {
             $writer = app(MigrationRunReportWriter::class);
             $writer->appendRow($run, [
-                'shopware_promotion_id' => $item->source_id,
+                'magento_promotion_id'  => $item->source_id,
                 'promotion_name'        => '',
                 'shopify_discount_type' => '',
                 'shopify_discount_gid'  => '',
@@ -596,7 +575,7 @@ class ProcessDiscountMigrationItemJob implements ShouldQueue
 
         try {
             app(MigrationRunReportWriter::class)->appendRow($run, [
-                'shopware_promotion_id' => $item->source_id,
+                'magento_promotion_id'  => $item->source_id,
                 'promotion_name'        => $promotionName,
                 'shopify_discount_type' => '',
                 'shopify_discount_gid'  => '',

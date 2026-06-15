@@ -9,7 +9,7 @@ use App\Services\Migration\OrderFingerprint;
 use App\Services\Migration\OrderMigrationService;
 use App\Services\Migration\OrderPayloadMapper;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 
@@ -26,10 +26,10 @@ class OrderMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -53,11 +53,11 @@ class OrderMigrationController extends Controller
         $page = (int) ($validated['page'] ?? 1);
         $includePayload = (bool) ($validated['include_payload'] ?? false);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(OrderPayloadMapper::class);
         $fingerprints = app(OrderFingerprint::class);
 
-        $res = $shopware->searchOrders($conn, 50, $page, $filter);
+        $res = $magento->searchOrders($conn, 50, $page, $filter);
         $orders = $res['orders'] ?? [];
         if (!is_array($orders) || count($orders) === 0) {
             return response()->json([
@@ -90,8 +90,8 @@ class OrderMigrationController extends Controller
 
             if ($includePayload) {
                 $out['payload'] = $payload;
-                $out['shopware_metafields'] = $mapped['metafields'];
-                $out['shopware_raw'] = $mapped['shopware_raw'];
+                $out['magento_metafields'] = [];
+                $out['magento_raw'] = $mapped['magento_raw'];
             }
 
             $items[] = $out;
@@ -108,10 +108,10 @@ class OrderMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -124,11 +124,11 @@ class OrderMigrationController extends Controller
         $page = (int) ($validated['page'] ?? 1);
         $includePayload = (bool) ($validated['include_payload'] ?? false);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(OrderPayloadMapper::class);
         $fingerprints = app(OrderFingerprint::class);
 
-        $res = $shopware->searchOrders($conn, 50, $page);
+        $res = $magento->searchOrders($conn, 50, $page);
         $orders = $res['orders'] ?? [];
         if (!is_array($orders) || count($orders) === 0) {
             return response()->json([
@@ -161,8 +161,8 @@ class OrderMigrationController extends Controller
 
             if ($includePayload) {
                 $out['payload'] = $payload;
-                $out['shopware_metafields'] = $mapped['metafields'];
-                $out['shopware_raw'] = $mapped['shopware_raw'];
+                $out['magento_metafields'] = [];
+                $out['magento_raw'] = $mapped['magento_raw'];
             }
 
             $items[] = $out;
@@ -224,8 +224,7 @@ class OrderMigrationController extends Controller
                 'duration_seconds' => $durationSeconds,
                 'report_available' => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/' . $run->id . '/report',
-                'pdf_available' => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url' => '/api/migration/runs/' . $run->id . '/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
             'prerequisites' => $this->service->prerequisites($shop),

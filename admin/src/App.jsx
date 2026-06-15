@@ -54,8 +54,8 @@ function getRouteUrl(route) {
 }
 
 /**
- * LanguageSelectionCard — shown on Step 0 (Connection) when Shopware is connected.
- * Auto-fetches available Shopware languages and lets the user select which ones to
+ * LanguageSelectionCard — shown on Step 0 (Connection) when Magento is connected.
+ * Auto-fetches available Magento languages and lets the user select which ones to
  * include in the translation migration. Saves the config via the existing connection endpoint.
  */
 function LanguageSelectionCard({ api, languageConfig, onSave, saving }) {
@@ -80,14 +80,14 @@ function LanguageSelectionCard({ api, languageConfig, onSave, saving }) {
   useEffect(() => {
     setFetching(true)
     setFetchError(null)
-    api.get('/api/shopware-languages')
+    api.get('/api/magento-languages')
       .then((data) => {
         const fetched = Array.isArray(data?.languages) ? data.languages : []
         setLocalConfig(mergeLanguages(fetched, languageConfig))
         setFetching(false)
       })
       .catch((e) => {
-        setFetchError(e?.message || 'Failed to fetch languages from Shopware')
+        setFetchError(e?.message || 'Failed to fetch languages from Magento')
         // Fall back to saved config
         if (Array.isArray(languageConfig) && languageConfig.length > 0) {
           setLocalConfig(languageConfig.map((l) => ({ ...l, enabled: l.enabled ?? false })))
@@ -118,7 +118,7 @@ function LanguageSelectionCard({ api, languageConfig, onSave, saving }) {
           <div>
             <Text as="h3" variant="headingSm">Translation Languages</Text>
             <Text as="p" tone="subdued" variant="bodySm">
-              Select which Shopware languages to migrate as translations to Shopify.
+              Select which Magento languages/store views to migrate as translations to Shopify.
               Leave all unchecked to skip translation migration.
             </Text>
           </div>
@@ -133,7 +133,7 @@ function LanguageSelectionCard({ api, languageConfig, onSave, saving }) {
 
         {!fetching && Array.isArray(localConfig) && localConfig.length === 0 && (
           <Text as="p" tone="subdued" variant="bodySm">
-            No languages found in your Shopware store.
+            No languages found in your Magento store.
           </Text>
         )}
 
@@ -206,163 +206,6 @@ function LanguageSelectionCard({ api, languageConfig, onSave, saving }) {
   )
 }
 
-/**
- * SalesChannelScopingCard — shown on Step 0 (Connection) when Shopware is connected.
- * Lets the user optionally restrict the migration to a specific Shopware Sales Channel.
- * This enables multi-store use-cases where each Shopify store maps to one Storefront.
- */
-function SalesChannelScopingCard({ api, salesChannelId, salesChannelName, navigationCategoryId, onSave, saving }) {
-  const [channels, setChannels] = useState(null)
-  const [fetching, setFetching] = useState(false)
-  const [fetchError, setFetchError] = useState(null)
-  const [selectedId, setSelectedId] = useState(salesChannelId || '')
-  const [dirty, setDirty] = useState(false)
-
-  // Fetch function — extracted so it can be called on mount AND by the Refresh button
-  const fetchChannels = useCallback(() => {
-    setFetching(true)
-    setFetchError(null)
-    // Cache is busted server-side on every call, so this always returns live data
-    api.get('/api/shopware-sales-channels')
-      .then((data) => {
-        const fetched = Array.isArray(data?.sales_channels) ? data.sales_channels : []
-        setChannels(fetched)
-        setFetching(false)
-      })
-      .catch((e) => {
-        setFetchError(e?.message || 'Failed to fetch Sales Channels from Shopware')
-        setChannels([])
-        setFetching(false)
-      })
-  }, [api])
-
-  // Auto-fetch on mount
-  useEffect(() => { fetchChannels() }, [fetchChannels])
-
-  const handleSelect = useCallback((value) => {
-    setSelectedId(value)
-    setDirty(true)
-  }, [])
-
-  const handleSave = useCallback(() => {
-    if (!dirty) return
-    const chosen = (channels || []).find((c) => c.id === selectedId)
-    onSave({
-      sales_channel_id:       chosen ? chosen.id : null,
-      sales_channel_name:     chosen ? chosen.name : null,
-      navigation_category_id: chosen ? chosen.navigation_category_id : null,
-    })
-    setDirty(false)
-  }, [dirty, channels, selectedId, onSave])
-
-  const selectOptions = [
-    { label: '— All Sales Channels (no filter) —', value: '' },
-    ...((channels || []).map((c) => ({
-      label: c.name + (c.type ? ` (${c.type})` : ''),
-      value: c.id,
-    }))),
-  ]
-
-  const channelCount = Array.isArray(channels) ? channels.length : null
-  const activeScopeName = salesChannelName || (salesChannelId ? salesChannelId : null)
-
-  return (
-    <Box paddingBlockStart="400">
-      <BlockStack gap="300">
-        {/* Header row with title + refresh button */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', justifyContent: 'space-between' }}>
-          <div>
-            <Text as="h3" variant="headingSm">Sales Channel Scope</Text>
-            <Text as="p" tone="subdued" variant="bodySm">
-              Optionally restrict this migration to a specific Shopware Sales Channel (Storefront).
-              Useful when connecting multiple Shopify stores to the same Shopware instance.
-              Leave unselected to migrate all data.
-            </Text>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-            {fetching && <Spinner size="small" />}
-            {!fetching && (
-              <Button
-                size="slim"
-                variant="secondary"
-                onClick={fetchChannels}
-                accessibilityLabel="Refresh Sales Channels"
-              >
-                ↻ Refresh
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Channel count badge */}
-        {!fetching && channelCount !== null && channelCount > 0 && (
-          <Text as="p" tone="subdued" variant="bodySm">
-            {channelCount} Sales Channel{channelCount !== 1 ? 's' : ''} found in Shopware
-          </Text>
-        )}
-
-        {fetchError && (
-          <Banner status="warning" title="Could not fetch Sales Channels">
-            <p>{fetchError}</p>
-          </Banner>
-        )}
-
-        {!fetching && Array.isArray(channels) && channels.length === 0 && !fetchError && (
-          <Text as="p" tone="subdued" variant="bodySm">
-            No Sales Channels found in your Shopware store.
-          </Text>
-        )}
-
-        {!fetching && Array.isArray(channels) && channels.length > 0 && (
-          <Select
-            label="Sales Channel"
-            options={selectOptions}
-            value={selectedId}
-            onChange={handleSelect}
-            disabled={saving}
-          />
-        )}
-
-        {activeScopeName && !dirty && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '6px 10px',
-            borderRadius: '6px',
-            background: 'rgba(26,127,90,0.07)',
-            border: '1px solid rgba(26,127,90,0.25)',
-          }}>
-            <span style={{ fontSize: '13px' }}>🎯</span>
-            <Text as="span" variant="bodySm" tone="success">
-              Scoped to: <strong>{activeScopeName}</strong>
-            </Text>
-          </div>
-        )}
-
-        {!fetching && Array.isArray(channels) && channels.length > 0 && (
-          <InlineStack gap="300" align="space-between" blockAlign="center">
-            <Text as="span" tone="subdued" variant="bodySm">
-              {selectedId
-                ? 'Migration will be scoped to the selected Sales Channel'
-                : 'All data will be migrated (no Sales Channel filter)'}
-            </Text>
-            <Button
-              variant="primary"
-              size="slim"
-              loading={saving}
-              disabled={!dirty}
-              onClick={handleSave}
-            >
-              Save Scope
-            </Button>
-          </InlineStack>
-        )}
-      </BlockStack>
-    </Box>
-  )
-}
-
 function App() {
   const api = useApiClient()
 
@@ -378,8 +221,8 @@ function App() {
   }, [])
 
   const [apiUrl, setApiUrl] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [clientSecret, setClientSecret] = useState('')
+  const [filesPath, setFilesPath] = useState('')
+  const [accessToken, setAccessToken] = useState('')
   const [editingSecret, setEditingSecret] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
   const [locationGid, setLocationGid] = useState('')
@@ -389,6 +232,8 @@ function App() {
   const [preview, setPreview] = useState(null)
   const [redirectPreview, setRedirectPreview] = useState(null)
   const [redirectImportResult, setRedirectImportResult] = useState(null)
+  const [collectionRedirectPreview, setCollectionRedirectPreview] = useState(null)
+  const [collectionRedirectImportResult, setCollectionRedirectImportResult] = useState(null)
   const [manufacturerPreview, setManufacturerPreview] = useState(null)
   const [customerPreview, setCustomerPreview] = useState(null)
   const [customerDateMode, setCustomerDateMode] = useState('after')
@@ -431,6 +276,18 @@ function App() {
   const [productMappingInfoOpen, setProductMappingInfoOpen] = useState(false)
   const [productLimitationsOpen, setProductLimitationsOpen] = useState(false)
 
+  const [manufacturerMappingInfoOpen, setManufacturerMappingInfoOpen] = useState(false)
+  const [manufacturerLimitationsOpen, setManufacturerLimitationsOpen] = useState(false)
+
+  const [customerMappingInfoOpen, setCustomerMappingInfoOpen] = useState(false)
+  const [customerLimitationsOpen, setCustomerLimitationsOpen] = useState(false)
+
+  const [orderMappingInfoOpen, setOrderMappingInfoOpen] = useState(false)
+  const [orderLimitationsOpen, setOrderLimitationsOpen] = useState(false)
+
+  const [newsletterMappingInfoOpen, setNewsletterMappingInfoOpen] = useState(false)
+  const [newsletterLimitationsOpen, setNewsletterLimitationsOpen] = useState(false)
+
   // State mapping card
   const [stateMappingTab, setStateMappingTab] = useState(0)
   const [stateMappings, setStateMappings] = useState(null)
@@ -465,8 +322,8 @@ function App() {
   }, [])
 
   const connectionQuery = useQuery({
-    queryKey: ['shopware-connection'],
-    queryFn: () => api.get('/api/shopware-connection'),
+    queryKey: ['magento-connection'],
+    queryFn: () => api.get('/api/magento-connection'),
   })
 
   const previewFilteredOrderMigration = useMutation({
@@ -615,6 +472,31 @@ function App() {
     },
   })
 
+  const previewCollectionRedirectMigration = useMutation({
+    mutationFn: (payload) => api.post('/api/migration/collections/redirects/preview', payload),
+    onSuccess: (data) => {
+      setCollectionRedirectPreview(data)
+      const items = Array.isArray(data?.items) ? data.items : []
+      setToast({ content: `Collection redirect preview loaded: ${items.length}` })
+    },
+    onError: (e) => {
+      setToast({ content: e?.message || 'Collection redirect preview failed', error: true })
+    },
+  })
+
+  const importCollectionRedirectMigration = useMutation({
+    mutationFn: (payload) => api.post('/api/migration/collections/redirects/import', payload),
+    onSuccess: (data) => {
+      setCollectionRedirectImportResult(data)
+      setToast({
+        content: `Collection redirect import done: ${data?.succeeded ?? 0} succeeded, ${data?.failed ?? 0} failed`,
+      })
+    },
+    onError: (e) => {
+      setToast({ content: e?.message || 'Collection redirect import failed', error: true })
+    },
+  })
+
   const previewFilteredProductMigration = useMutation({
     mutationFn: (payload) => api.post('/api/migration/products/preview-filtered', payload),
     onSuccess: (data) => {
@@ -647,10 +529,10 @@ function App() {
     if (typeof d.api_url === 'string' && d.api_url !== '' && apiUrl === '') {
       setApiUrl(d.api_url)
     }
-    if (typeof d.client_id === 'string' && d.client_id !== '' && clientId === '') {
-      setClientId(d.client_id)
+    if (typeof d.files_path === 'string' && d.files_path !== '' && filesPath === '') {
+      setFilesPath(d.files_path)
     }
-  }, [connectionQuery.data, apiUrl, clientId])
+  }, [connectionQuery.data, apiUrl, filesPath])
 
   const meQuery = useQuery({
     queryKey: ['me'],
@@ -743,15 +625,15 @@ function App() {
   })
 
   const saveConnection = useMutation({
-    mutationFn: (payload) => api.post('/api/shopware-connection', payload),
+    mutationFn: (payload) => api.post('/api/magento-connection', payload),
     onSuccess: () => {
       setError(null)
       setFieldErrors({})
       connectionQuery.refetch()
-      setToast({ content: 'Shopware connection saved' })
+      setToast({ content: 'Magento connection saved' })
       setEditingSecret(false)
       setShowSecret(false)
-      setClientSecret('')
+      setAccessToken('')
     },
     onError: (e) => {
       const errors = e?.details?.errors
@@ -1002,7 +884,7 @@ function App() {
     const items = newsletterStatusQuery.data?.recent_failed_items
     return Array.isArray(items) ? items : []
   }, [newsletterStatusQuery.data])
-  const secretSaved = connectionQuery.data?.client_secret_saved === true
+  const secretSaved = connectionQuery.data?.access_token_saved === true
   const manufacturerRun = manufacturerStatusQuery.data?.run
   const isManufacturerRunning = manufacturerRun?.status === 'running' || manufacturerRun?.status === 'queued'
   const manufacturerPreviewItems = useMemo(() => {
@@ -1035,7 +917,7 @@ function App() {
   })
 
   const startMarketMigration = useMutation({
-    mutationFn: () => api.post('/api/migration/markets/start', {}),
+    mutationFn: (payload) => api.post('/api/migration/markets/start', payload ?? {}),
     onSuccess: () => {
       marketStatusQuery.refetch()
       setToast({ content: 'Market migration started' })
@@ -1179,22 +1061,6 @@ function App() {
     }
   }, [api])
 
-  const handleDownloadPdfReport = useCallback(async (migrationRun) => {
-    if (!migrationRun?.pdf_download_url || !migrationRun?.pdf_available) return
-    try {
-      const { blob, filename } = await api.downloadBlob(migrationRun.pdf_download_url, { method: 'GET' })
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename || `migration-run-${migrationRun.id}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.URL.revokeObjectURL(url)
-    } catch (e) {
-      setToast({ content: e?.message || 'Failed to download PDF report', error: true })
-    }
-  }, [api])
 
   const durationLabel = useMemo(() => {
     return formatDurationSeconds(durationSecondsFromRun(run))
@@ -1294,11 +1160,11 @@ function App() {
                 Welcome
               </Text>
               <Text as="p" tone="subdued">
-                Use the navigation to configure Shopware access and run your product + variant migration.
+                Use the navigation to configure Magento access and run your product + variant migration.
               </Text>
               <Divider />
               <InlineStack gap="300" align="start" blockAlign="center">
-                <Text as="span">Shopware connection:</Text>
+                <Text as="span">Magento connection:</Text>
                 <Text as="span" tone={connected ? 'success' : 'critical'}>
                   {connected ? 'Connected' : 'Not connected'}
                 </Text>
@@ -1312,7 +1178,7 @@ function App() {
                   </Text>
                   <TextContainer spacing="tight">
                     <Text as="p">Page: {preview.page ?? '-'}</Text>
-                    <Text as="p">Total (Shopware): {preview.total ?? '-'}</Text>
+                    <Text as="p">Total (Magento): {preview.total ?? '-'}</Text>
                   </TextContainer>
 
                   {previewItems.length > 0 ? (
@@ -1328,7 +1194,7 @@ function App() {
                               </Text>
                               <Text as="span">
                                 {' '}
-                                — Shopware children: {it.shopware_child_count ?? '-'}; mapped variants: {it.variant_count ?? '-'} (expected:{' '}
+                                — Magento children: {it.magento_child_count ?? '-'}; mapped variants: {it.variant_count ?? '-'} (expected:{' '}
                                 {it.expected_variant_count ?? '-'}) ; options: {it.option_count ?? '-'}; bytes: {it.payload_bytes ?? '-'}
                               </Text>
                               {sample.length > 0 ? (
@@ -1387,10 +1253,10 @@ function App() {
           <Card>
             <BlockStack gap="400">
               <Text as="h2" variant="headingMd">
-                Shopware credentials (how to get them)
+                Magento credentials (how to get them)
               </Text>
               <Text as="p" tone="subdued">
-                You will need your Shopware Admin URL plus an OAuth integration (Client ID + Client Secret).
+                You will need your Magento API URL plus an integration Access Token.
               </Text>
 
               <Card background="bg-surface-secondary">
@@ -1399,12 +1265,12 @@ function App() {
                     Steps
                   </Text>
                   <List type="number">
-                    <List.Item>Open your Shopware Admin panel.</List.Item>
-                    <List.Item>Go to Settings - System - Integrations.</List.Item>
-                    <List.Item>Create a new integration and enable API access.</List.Item>
-                    <List.Item>Copy the Client ID and Client Secret.</List.Item>
+                    <List.Item>Open your Magento Admin panel.</List.Item>
+                    <List.Item>Go to System - Extensions - Integrations.</List.Item>
+                    <List.Item>Create a new integration and grant appropriate API resource permissions.</List.Item>
+                    <List.Item>Copy the Access Token.</List.Item>
                     <List.Item>
-                      Set the API URL (example): https://your-shopware-domain.com
+                      Set the API URL (example): https://your-magento-domain.com
                     </List.Item>
                   </List>
                 </BlockStack>
@@ -1412,7 +1278,7 @@ function App() {
 
               <Banner status="info" title="Tip">
                 <p>
-                  We will add a guided wizard later. For now, paste the API URL, Client ID and Secret in the Migration page.
+                  We will add a guided wizard later. For now, paste the API URL and Access Token in the Migration page.
                 </p>
               </Banner>
             </BlockStack>
@@ -1468,13 +1334,13 @@ function App() {
                   </Text>
                 </Box>
               </div>
-              <div style={{ 
-                display: 'flex', 
-                gap: '0', 
-                alignItems: 'stretch', 
-                flexWrap: 'wrap', 
+              <div style={{
+                display: 'flex',
+                gap: '0',
+                alignItems: 'stretch',
+                flexWrap: 'wrap',
                 background: 'var(--p-color-bg-surface-secondary)',
-                borderRadius: '12px', 
+                borderRadius: '12px',
                 padding: '6px',
                 border: '1px solid var(--p-color-border-subdued)'
               }}>
@@ -1528,17 +1394,17 @@ function App() {
                       }}>
                         {idx + 1}
                       </span>
-                      <span style={{ 
+                      <span style={{
                         transition: 'all 0.25s ease',
                         fontWeight: wizardStep === step.id ? '600' : '400',
                       }}>{step.label}</span>
                     </button>
                     {idx < wizardSteps.length - 1 && (
-                      <div style={{ 
-                        width: '20px', 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center', 
+                      <div style={{
+                        width: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                         color: 'var(--p-color-text-subdued)',
                         fontSize: '14px',
                         flexShrink: 0,
@@ -1559,140 +1425,117 @@ function App() {
             <Card>
               <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">
-                  Step 1: Connect Shopware
+                  Step 1: Connect Magento
                 </Text>
 
-              <TextField
-                label="Shopware API URL"
-                value={apiUrl}
-                onChange={(v) => {
-                  setApiUrl(v)
-                  if (fieldErrors.api_url) setFieldErrors((s) => ({ ...s, api_url: undefined }))
-                }}
-                error={Array.isArray(fieldErrors.api_url) ? fieldErrors.api_url[0] : undefined}
-                autoComplete="off"
-              />
-              <TextField
-                label="Client ID"
-                value={clientId}
-                onChange={(v) => {
-                  setClientId(v)
-                  if (fieldErrors.client_id) setFieldErrors((s) => ({ ...s, client_id: undefined }))
-                }}
-                error={Array.isArray(fieldErrors.client_id) ? fieldErrors.client_id[0] : undefined}
-                autoComplete="off"
-              />
-              <TextField
-                label={secretSaved ? 'Client Secret (saved)' : 'Client Secret'}
-                value={secretSaved && !editingSecret ? '••••••••••••••••' : clientSecret}
-                readOnly={secretSaved && !editingSecret}
-                onChange={(v) => {
-                  setClientSecret(v)
-                  if (fieldErrors.client_secret) setFieldErrors((s) => ({ ...s, client_secret: undefined }))
-                }}
-                error={Array.isArray(fieldErrors.client_secret) ? fieldErrors.client_secret[0] : undefined}
-                helpText={secretSaved ? 'Secret is stored securely and not displayed. Enter a new secret only if you want to replace it.' : undefined}
-                type={secretSaved && !editingSecret ? 'password' : showSecret ? 'text' : 'password'}
-                autoComplete="off"
-                connectedRight={
-                  secretSaved && !editingSecret ? (
-                    <ButtonGroup>
+                <TextField
+                  label="Magento API URL"
+                  value={apiUrl}
+                  onChange={(v) => {
+                    setApiUrl(v)
+                    if (fieldErrors.api_url) setFieldErrors((s) => ({ ...s, api_url: undefined }))
+                  }}
+                  error={Array.isArray(fieldErrors.api_url) ? fieldErrors.api_url[0] : undefined}
+                  autoComplete="off"
+                />
+                <TextField
+                  label={secretSaved ? 'Access Token (saved)' : 'Access Token'}
+                  value={secretSaved && !editingSecret ? '••••••••••••••••' : accessToken}
+                  readOnly={secretSaved && !editingSecret}
+                  onChange={(v) => {
+                    setAccessToken(v)
+                    if (fieldErrors.access_token) setFieldErrors((s) => ({ ...s, access_token: undefined }))
+                  }}
+                  error={Array.isArray(fieldErrors.access_token) ? fieldErrors.access_token[0] : undefined}
+                  helpText={secretSaved ? 'Token is stored securely and not displayed. Enter a new token only if you want to replace it.' : undefined}
+                  type={secretSaved && !editingSecret ? 'password' : showSecret ? 'text' : 'password'}
+                  autoComplete="off"
+                  connectedRight={
+                    secretSaved && !editingSecret ? (
+                      <ButtonGroup>
+                        <Button
+                          size="slim"
+                          icon={ViewIcon}
+                          accessibilityLabel="Reveal token"
+                          onClick={() => setToast({ content: 'Saved access tokens are not displayed. Click Change to enter a new token.', error: true })}
+                        />
+                        <Button
+                          size="slim"
+                          icon={EditIcon}
+                          onClick={() => {
+                            setEditingSecret(true)
+                            setShowSecret(false)
+                            setAccessToken('')
+                          }}
+                        >
+                          Change
+                        </Button>
+                      </ButtonGroup>
+                    ) : (
                       <Button
                         size="slim"
                         icon={ViewIcon}
-                        accessibilityLabel="Reveal secret"
-                        onClick={() => setToast({ content: 'Saved secrets are not displayed. Click Change to enter a new secret.', error: true })}
+                        accessibilityLabel={showSecret ? 'Hide token' : 'Show token'}
+                        onClick={() => setShowSecret((s) => !s)}
                       />
-                      <Button
-                        size="slim"
-                        icon={EditIcon}
-                        onClick={() => {
-                          setEditingSecret(true)
-                          setShowSecret(false)
-                          setClientSecret('')
-                        }}
-                      >
-                        Change
-                      </Button>
-                    </ButtonGroup>
-                  ) : (
-                    <Button
-                      size="slim"
-                      icon={ViewIcon}
-                      accessibilityLabel={showSecret ? 'Hide secret' : 'Show secret'}
-                      onClick={() => setShowSecret((s) => !s)}
-                    />
-                  )
-                }
-              />
-
-              <InlineStack gap="300" align="start" blockAlign="center">
-                <Button
-                  variant="primary"
-                  loading={saveConnection.isPending}
-                  onClick={() => {
-                    const payload = { api_url: apiUrl, client_id: clientId }
-                    const secret = (clientSecret || '').trim()
-                    const needsSecret = !secretSaved || editingSecret
-                    if (needsSecret && secret) {
-                      payload.client_secret = secret
-                    }
-                    saveConnection.mutate(payload)
-                  }}
-                >
-                  Save connection
-                </Button>
-                {connectionQuery.isFetching ? <Spinner size="small" /> : null}
-                <Text as="span">Status: {connected ? 'Connected' : 'Not connected'}</Text>
-              </InlineStack>
-
-              {/* Language Selection — shown when connected */}
-              {connected && (
-                <LanguageSelectionCard
-                  api={api}
-                  languageConfig={connectionQuery.data?.language_config || []}
-                  onSave={(langConfig) => {
-                    const payload = { api_url: apiUrl, client_id: clientId, language_config: langConfig }
-                    saveConnection.mutate(payload)
-                  }}
-                  saving={saveConnection.isPending}
+                    )
+                  }
                 />
-              )}
 
-              {/* Sales Channel Scoping — shown when connected */}
-              {connected && (
-                <>
-                  <Divider />
-                  <SalesChannelScopingCard
-                    api={api}
-                    salesChannelId={connectionQuery.data?.sales_channel_id || null}
-                    salesChannelName={connectionQuery.data?.sales_channel_name || null}
-                    navigationCategoryId={connectionQuery.data?.navigation_category_id || null}
-                    onSave={(scopeData) => {
-                      const payload = {
-                        api_url: apiUrl,
-                        client_id: clientId,
-                        ...scopeData,
+                <TextField
+                  label="Media Directory Path (for products)"
+                  value={filesPath}
+                  onChange={(v) => setFilesPath(v)}
+                  placeholder="e.g. /var/www/html/magento/pub/media"
+                  helpText="Absolute path to Magento's pub/media directory. Required to download product files. Usually {magento_root}/pub/media."
+                  autoComplete="off"
+                />
+
+                <InlineStack gap="300" align="start" blockAlign="center">
+                  <Button
+                    variant="primary"
+                    loading={saveConnection.isPending}
+                    onClick={() => {
+                      const payload = { api_url: apiUrl, files_path: filesPath }
+                      const token = (accessToken || '').trim()
+                      const needsSecret = !secretSaved || editingSecret
+                      if (needsSecret && token) {
+                        payload.access_token = token
                       }
+                      saveConnection.mutate(payload)
+                    }}
+                  >
+                    Save connection
+                  </Button>
+                  {connectionQuery.isFetching ? <Spinner size="small" /> : null}
+                  <Text as="span">Status: {connected ? 'Connected' : 'Not connected'}</Text>
+                </InlineStack>
+
+                {/* Language Selection — shown when connected */}
+                {connected && (
+                  <LanguageSelectionCard
+                    api={api}
+                    languageConfig={connectionQuery.data?.language_config || []}
+                    onSave={(langConfig) => {
+                      const payload = { api_url: apiUrl, files_path: filesPath, language_config: langConfig }
                       saveConnection.mutate(payload)
                     }}
                     saving={saveConnection.isPending}
                   />
-                </>
-              )}
+                )}
 
-              {connected && (
-                <Box paddingBlockStart="300">
-                  <InlineStack gap="300" align="end" blockAlign="center">
-                    <Button variant="primary" onClick={() => setWizardStep(1)}>
-                      Next: Shop Location
-                    </Button>
-                  </InlineStack>
-                </Box>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+                {connected && (
+                  <Box paddingBlockStart="300">
+                    <InlineStack gap="300" align="end" blockAlign="center">
+                      <Button variant="primary" onClick={() => setWizardStep(1)}>
+                        Next: Shop Location
+                      </Button>
+                    </InlineStack>
+                  </Box>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
         )}
 
         {/* Step 1: Location */}
@@ -1703,47 +1546,47 @@ function App() {
                 <Text variant="headingMd" as="h2">
                   Step 2: Select Location
                 </Text>
-              <Select
-                label="Location"
-                options={locationOptions}
-                value={locationGid}
-                onChange={setLocationGid}
-                disabled={locationsQuery.isLoading}
-              />
-              {locationsQuery.isError ? (
-                <Banner status="critical" title="Failed to load locations">
-                  <p>{locationsQuery.error?.message || 'Could not fetch Shopify locations.'}</p>
-                  <Box paddingBlockStart="200">
-                    <Button onClick={() => locationsQuery.refetch()}>Retry</Button>
-                  </Box>
-                </Banner>
-              ) : null}
+                <Select
+                  label="Location"
+                  options={locationOptions}
+                  value={locationGid}
+                  onChange={setLocationGid}
+                  disabled={locationsQuery.isLoading}
+                />
+                {locationsQuery.isError ? (
+                  <Banner status="critical" title="Failed to load locations">
+                    <p>{locationsQuery.error?.message || 'Could not fetch Shopify locations.'}</p>
+                    <Box paddingBlockStart="200">
+                      <Button onClick={() => locationsQuery.refetch()}>Retry</Button>
+                    </Box>
+                  </Banner>
+                ) : null}
 
-              {!locationsQuery.isLoading && !locationsQuery.isError && Array.isArray(locations) && locations.length === 0 ? (
-                <Banner status="warning" title="No locations found">
-                  <p>
-                    Your store returned no locations. Make sure you have at least one location in Shopify (Settings → Locations) and that the app
-                    has permission to read inventory.
-                  </p>
-                  <Box paddingBlockStart="200">
-                    <Button onClick={() => locationsQuery.refetch()}>Retry</Button>
-                  </Box>
-                </Banner>
-              ) : null}
+                {!locationsQuery.isLoading && !locationsQuery.isError && Array.isArray(locations) && locations.length === 0 ? (
+                  <Banner status="warning" title="No locations found">
+                    <p>
+                      Your store returned no locations. Make sure you have at least one location in Shopify (Settings → Locations) and that the app
+                      has permission to read inventory.
+                    </p>
+                    <Box paddingBlockStart="200">
+                      <Button onClick={() => locationsQuery.refetch()}>Retry</Button>
+                    </Box>
+                  </Banner>
+                ) : null}
 
-              <InlineStack gap="300" align="space-between" blockAlign="center">
-                <Button variant="secondary" onClick={() => setWizardStep(0)}>
-                  Previous
-                </Button>
-                {locationGid && (
-                  <Button variant="primary" onClick={() => setWizardStep(2)}>
-                    Next
+                <InlineStack gap="300" align="space-between" blockAlign="center">
+                  <Button variant="secondary" onClick={() => setWizardStep(0)}>
+                    Previous
                   </Button>
-                )}
-              </InlineStack>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+                  {locationGid && (
+                    <Button variant="primary" onClick={() => setWizardStep(2)}>
+                      Next
+                    </Button>
+                  )}
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
         )}
 
         {/* Step 2: Assignments */}
@@ -1757,7 +1600,7 @@ function App() {
                       Step 3: Assignments
                     </Text>
                     <Text as="p" tone="subdued">
-                      Map Shopware values to Shopify equivalents. Applied during migration.
+                      Map Magento values to Shopify equivalents. Applied during migration.
                     </Text>
                   </BlockStack>
                   {stateMappingDirty ? (
@@ -1767,280 +1610,280 @@ function App() {
                   )}
                 </InlineStack>
 
-              {stateMappingQuery.isLoading ? (
-                <InlineStack gap="200" align="start" blockAlign="center">
-                  <Spinner size="small" />
-                  <Text as="span" tone="subdued">Loading state mappings…</Text>
-                </InlineStack>
-              ) : stateMappings && stateMappingOptions ? (
-                <BlockStack gap="400">
-                  {/* Custom tab bar matching wizard style */}
-                  <div style={{
-                    display: 'flex',
-                    gap: '0',
-                    background: 'var(--p-color-bg-surface-secondary)',
-                    borderRadius: '10px',
-                    padding: '4px',
-                    border: '1px solid var(--p-color-border-subdued)',
-                    flexWrap: 'wrap',
-                  }}>
-                    {[
-                      'Transaction States',
-                      'Delivery States',
-                      'Order States',
-                      'Payment Methods',
-                      'Shipping Methods',
-                      'Salutations',
-                    ].map((label, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => setStateMappingTab(idx)}
-                        style={{
-                          flex: '1 1 auto',
-                          padding: '8px 14px',
-                          border: 'none',
-                          background: stateMappingTab === idx ? '#1a7f5a' : 'transparent',
-                          color: stateMappingTab === idx ? 'white' : 'var(--p-color-text)',
-                          borderRadius: '7px',
-                          cursor: 'pointer',
-                          fontSize: '13px',
-                          fontWeight: stateMappingTab === idx ? '600' : '400',
-                          transition: 'all 0.2s ease',
-                          whiteSpace: 'nowrap',
-                          boxShadow: stateMappingTab === idx ? '0 2px 6px rgba(26,127,90,0.25)' : 'none',
-                        }}
-                        onMouseEnter={(e) => {
-                          if (stateMappingTab !== idx) e.currentTarget.style.background = 'var(--p-color-bg-surface-hover)'
-                        }}
-                        onMouseLeave={(e) => {
-                          if (stateMappingTab !== idx) e.currentTarget.style.background = 'transparent'
+                {stateMappingQuery.isLoading ? (
+                  <InlineStack gap="200" align="start" blockAlign="center">
+                    <Spinner size="small" />
+                    <Text as="span" tone="subdued">Loading state mappings…</Text>
+                  </InlineStack>
+                ) : stateMappings && stateMappingOptions ? (
+                  <BlockStack gap="400">
+                    {/* Custom tab bar matching wizard style */}
+                    <div style={{
+                      display: 'flex',
+                      gap: '0',
+                      background: 'var(--p-color-bg-surface-secondary)',
+                      borderRadius: '10px',
+                      padding: '4px',
+                      border: '1px solid var(--p-color-border-subdued)',
+                      flexWrap: 'wrap',
+                    }}>
+                      {[
+                        'Transaction States',
+                        'Delivery States',
+                        'Order States',
+                        'Payment Methods',
+                        'Shipping Methods',
+                        'Salutations',
+                      ].map((label, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setStateMappingTab(idx)}
+                          style={{
+                            flex: '1 1 auto',
+                            padding: '8px 14px',
+                            border: 'none',
+                            background: stateMappingTab === idx ? '#1a7f5a' : 'transparent',
+                            color: stateMappingTab === idx ? 'white' : 'var(--p-color-text)',
+                            borderRadius: '7px',
+                            cursor: 'pointer',
+                            fontSize: '13px',
+                            fontWeight: stateMappingTab === idx ? '600' : '400',
+                            transition: 'all 0.2s ease',
+                            whiteSpace: 'nowrap',
+                            boxShadow: stateMappingTab === idx ? '0 2px 6px rgba(26,127,90,0.25)' : 'none',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (stateMappingTab !== idx) e.currentTarget.style.background = 'var(--p-color-bg-surface-hover)'
+                          }}
+                          onMouseLeave={(e) => {
+                            if (stateMappingTab !== idx) e.currentTarget.style.background = 'transparent'
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Header row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', padding: '10px 12px', background: 'var(--p-color-bg-surface-secondary)', borderRadius: '8px' }}>
+                      <Text as="p" variant="bodySm" fontWeight="semibold" tone="subdued">Previous value</Text>
+                      <Text as="p" variant="bodySm" fontWeight="semibold" tone="subdued">New assignment</Text>
+                    </div>
+
+                    {stateMappingTab === 0 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.transaction_state || {}).map(([swState, sfStatus], idx) => (
+                          <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                            <div>
+                              <Text as="span" variant="bodyMd" fontWeight="medium">
+                                {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                              </Text>
+                              {'  '}
+                              <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
+                            </div>
+                            <Select
+                              label="" labelHidden
+                              options={(stateMappingOptions.order_financial || []).map(o => ({ label: o.label, value: o.value }))}
+                              value={sfStatus}
+                              onChange={(val) => {
+                                setStateMappings(prev => ({ ...prev, transaction_state: { ...prev.transaction_state, [swState]: val } }))
+                                setStateMappingDirty(true)
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </BlockStack>
+                    )}
+
+                    {stateMappingTab === 1 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.delivery_state || {}).map(([swState, sfStatus], idx) => (
+                          <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                            <div>
+                              <Text as="span" variant="bodyMd" fontWeight="medium">
+                                {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                              </Text>
+                              {'  '}
+                              <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
+                            </div>
+                            <Select
+                              label="" labelHidden
+                              options={(stateMappingOptions.fulfillment || []).map(o => ({ label: o.label, value: o.value }))}
+                              value={sfStatus}
+                              onChange={(val) => {
+                                setStateMappings(prev => ({ ...prev, delivery_state: { ...prev.delivery_state, [swState]: val } }))
+                                setStateMappingDirty(true)
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </BlockStack>
+                    )}
+
+                    {stateMappingTab === 2 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.order_state || {}).map(([swState, sfStatus], idx) => (
+                          <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                            <div>
+                              <Text as="span" variant="bodyMd" fontWeight="medium">
+                                {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                              </Text>
+                              {'  '}
+                              <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
+                            </div>
+                            <Select
+                              label="" labelHidden
+                              options={(stateMappingOptions.order_financial || []).map(o => ({ label: o.label, value: o.value }))}
+                              value={sfStatus}
+                              onChange={(val) => {
+                                setStateMappings(prev => ({ ...prev, order_state: { ...prev.order_state, [swState]: val } }))
+                                setStateMappingDirty(true)
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </BlockStack>
+                    )}
+
+                    {stateMappingTab === 3 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.payment_methods || {}).length === 0 ? (
+                          <Box padding="400">
+                            <BlockStack gap="200">
+                              <Text as="p" tone="subdued">No Magento payment methods found yet.</Text>
+                              <Text as="p" tone="subdued">Payment method names are auto-discovered from your Magento orders during migration. Run an order preview to populate this list.</Text>
+                            </BlockStack>
+                          </Box>
+                        ) : (
+                          Object.entries(stateMappings.payment_methods || {}).map(([swMethod, sfMethod], idx) => (
+                            <div key={swMethod} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                              <div>
+                                <Text as="span" variant="bodyMd" fontWeight="medium">{swMethod}</Text>
+                              </div>
+                              <Select
+                                label="" labelHidden
+                                options={(stateMappingOptions.payment_methods || []).map(o => ({ label: o.label, value: o.value }))}
+                                value={sfMethod}
+                                onChange={(val) => {
+                                  setStateMappings(prev => ({ ...prev, payment_methods: { ...prev.payment_methods, [swMethod]: val } }))
+                                  setStateMappingDirty(true)
+                                }}
+                              />
+                            </div>
+                          ))
+                        )}
+                      </BlockStack>
+                    )}
+
+                    {stateMappingTab === 4 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.shipping_methods || {}).length === 0 ? (
+                          <Box padding="400">
+                            <BlockStack gap="200">
+                              <Text as="p" tone="subdued">No Magento shipping methods found yet.</Text>
+                              <Text as="p" tone="subdued">Shipping method names are auto-discovered from your Magento orders during migration. Run an order preview to populate this list.</Text>
+                            </BlockStack>
+                          </Box>
+                        ) : (
+                          Object.entries(stateMappings.shipping_methods || {}).map(([swMethod, sfMethod], idx) => (
+                            <div key={swMethod} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                              <div>
+                                <Text as="span" variant="bodyMd" fontWeight="medium">{swMethod}</Text>
+                              </div>
+                              <Select
+                                label="" labelHidden
+                                options={(stateMappingOptions.shipping_methods || []).map(o => ({ label: o.label, value: o.value }))}
+                                value={sfMethod}
+                                onChange={(val) => {
+                                  setStateMappings(prev => ({ ...prev, shipping_methods: { ...prev.shipping_methods, [swMethod]: val } }))
+                                  setStateMappingDirty(true)
+                                }}
+                              />
+                            </div>
+                          ))
+                        )}
+                      </BlockStack>
+                    )}
+
+                    {stateMappingTab === 5 && (
+                      <BlockStack gap="0">
+                        {Object.entries(stateMappings.salutations || {}).length === 0 ? (
+                          <Box padding="400">
+                            <Text as="p" tone="subdued">No salutations configured. Add salutation mappings via the Magento API or contact support.</Text>
+                          </Box>
+                        ) : (
+                          Object.entries(stateMappings.salutations || {}).map(([swSalutation, sfSalutation], idx) => (
+                            <div key={swSalutation} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
+                              <div>
+                                <Text as="span" variant="bodyMd" fontWeight="medium">
+                                  {swSalutation.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                                </Text>
+                                {'  '}
+                                <Text as="span" variant="bodySm" tone="subdued">({swSalutation})</Text>
+                              </div>
+                              <Select
+                                label="" labelHidden
+                                options={(stateMappingOptions.salutations || []).map(o => ({ label: o.label, value: o.value }))}
+                                value={sfSalutation}
+                                onChange={(val) => {
+                                  setStateMappings(prev => ({ ...prev, salutations: { ...prev.salutations, [swSalutation]: val } }))
+                                  setStateMappingDirty(true)
+                                }}
+                              />
+                            </div>
+                          ))
+                        )}
+                      </BlockStack>
+                    )}
+
+                    <Divider />
+
+                    <InlineStack gap="300" align="start" blockAlign="center">
+                      <Button
+                        variant="primary"
+                        loading={saveStateMappings.isPending}
+                        disabled={!stateMappingDirty}
+                        onClick={() => saveStateMappings.mutate({ mappings: stateMappings })}
+                      >
+                        Save mappings
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={!stateMappingDirty || saveStateMappings.isPending}
+                        onClick={() => {
+                          const data = stateMappingQuery.data
+                          if (data?.mappings) {
+                            setStateMappings(JSON.parse(JSON.stringify(data.mappings)))
+                            setStateMappingDirty(false)
+                          }
                         }}
                       >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                        Reset to saved
+                      </Button>
+                      {stateMappingQuery.isFetching ? <Spinner size="small" /> : null}
+                    </InlineStack>
 
-                  {/* Header row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', padding: '10px 12px', background: 'var(--p-color-bg-surface-secondary)', borderRadius: '8px' }}>
-                    <Text as="p" variant="bodySm" fontWeight="semibold" tone="subdued">Previous value</Text>
-                    <Text as="p" variant="bodySm" fontWeight="semibold" tone="subdued">New assignment</Text>
-                  </div>
+                    <Banner tone="info">
+                      <p>Changes take effect on the next migration run. Values not listed here use the default fallback logic.</p>
+                    </Banner>
 
-                      {stateMappingTab === 0 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.transaction_state || {}).map(([swState, sfStatus], idx) => (
-                            <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                              <div>
-                                <Text as="span" variant="bodyMd" fontWeight="medium">
-                                  {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                                </Text>
-                                {'  '}
-                                <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
-                              </div>
-                              <Select
-                                label="" labelHidden
-                                options={(stateMappingOptions.order_financial || []).map(o => ({ label: o.label, value: o.value }))}
-                                value={sfStatus}
-                                onChange={(val) => {
-                                  setStateMappings(prev => ({ ...prev, transaction_state: { ...prev.transaction_state, [swState]: val } }))
-                                  setStateMappingDirty(true)
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </BlockStack>
-                      )}
-
-                      {stateMappingTab === 1 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.delivery_state || {}).map(([swState, sfStatus], idx) => (
-                            <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                              <div>
-                                <Text as="span" variant="bodyMd" fontWeight="medium">
-                                  {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                                </Text>
-                                {'  '}
-                                <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
-                              </div>
-                              <Select
-                                label="" labelHidden
-                                options={(stateMappingOptions.fulfillment || []).map(o => ({ label: o.label, value: o.value }))}
-                                value={sfStatus}
-                                onChange={(val) => {
-                                  setStateMappings(prev => ({ ...prev, delivery_state: { ...prev.delivery_state, [swState]: val } }))
-                                  setStateMappingDirty(true)
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </BlockStack>
-                      )}
-
-                      {stateMappingTab === 2 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.order_state || {}).map(([swState, sfStatus], idx) => (
-                            <div key={swState} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                              <div>
-                                <Text as="span" variant="bodyMd" fontWeight="medium">
-                                  {swState.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                                </Text>
-                                {'  '}
-                                <Text as="span" variant="bodySm" tone="subdued">({swState})</Text>
-                              </div>
-                              <Select
-                                label="" labelHidden
-                                options={(stateMappingOptions.order_financial || []).map(o => ({ label: o.label, value: o.value }))}
-                                value={sfStatus}
-                                onChange={(val) => {
-                                  setStateMappings(prev => ({ ...prev, order_state: { ...prev.order_state, [swState]: val } }))
-                                  setStateMappingDirty(true)
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </BlockStack>
-                      )}
-
-                      {stateMappingTab === 3 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.payment_methods || {}).length === 0 ? (
-                            <Box padding="400">
-                              <BlockStack gap="200">
-                                <Text as="p" tone="subdued">No Shopware payment methods found yet.</Text>
-                                <Text as="p" tone="subdued">Payment method names are auto-discovered from your Shopware orders during migration. Run an order preview to populate this list.</Text>
-                              </BlockStack>
-                            </Box>
-                          ) : (
-                            Object.entries(stateMappings.payment_methods || {}).map(([swMethod, sfMethod], idx) => (
-                              <div key={swMethod} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                                <div>
-                                  <Text as="span" variant="bodyMd" fontWeight="medium">{swMethod}</Text>
-                                </div>
-                                <Select
-                                  label="" labelHidden
-                                  options={(stateMappingOptions.payment_methods || []).map(o => ({ label: o.label, value: o.value }))}
-                                  value={sfMethod}
-                                  onChange={(val) => {
-                                    setStateMappings(prev => ({ ...prev, payment_methods: { ...prev.payment_methods, [swMethod]: val } }))
-                                    setStateMappingDirty(true)
-                                  }}
-                                />
-                              </div>
-                            ))
-                          )}
-                        </BlockStack>
-                      )}
-
-                      {stateMappingTab === 4 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.shipping_methods || {}).length === 0 ? (
-                            <Box padding="400">
-                              <BlockStack gap="200">
-                                <Text as="p" tone="subdued">No Shopware shipping methods found yet.</Text>
-                                <Text as="p" tone="subdued">Shipping method names are auto-discovered from your Shopware orders during migration. Run an order preview to populate this list.</Text>
-                              </BlockStack>
-                            </Box>
-                          ) : (
-                            Object.entries(stateMappings.shipping_methods || {}).map(([swMethod, sfMethod], idx) => (
-                              <div key={swMethod} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                                <div>
-                                  <Text as="span" variant="bodyMd" fontWeight="medium">{swMethod}</Text>
-                                </div>
-                                <Select
-                                  label="" labelHidden
-                                  options={(stateMappingOptions.shipping_methods || []).map(o => ({ label: o.label, value: o.value }))}
-                                  value={sfMethod}
-                                  onChange={(val) => {
-                                    setStateMappings(prev => ({ ...prev, shipping_methods: { ...prev.shipping_methods, [swMethod]: val } }))
-                                    setStateMappingDirty(true)
-                                  }}
-                                />
-                              </div>
-                            ))
-                          )}
-                        </BlockStack>
-                      )}
-
-                      {stateMappingTab === 5 && (
-                        <BlockStack gap="0">
-                          {Object.entries(stateMappings.salutations || {}).length === 0 ? (
-                            <Box padding="400">
-                              <Text as="p" tone="subdued">No salutations configured. Add salutation mappings via the Shopware API or contact support.</Text>
-                            </Box>
-                          ) : (
-                            Object.entries(stateMappings.salutations || {}).map(([swSalutation, sfSalutation], idx) => (
-                              <div key={swSalutation} className="mapping-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--p-color-border-subdued)', background: idx % 2 === 0 ? 'transparent' : 'var(--p-color-bg-surface-secondary)' }}>
-                                <div>
-                                  <Text as="span" variant="bodyMd" fontWeight="medium">
-                                    {swSalutation.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                                  </Text>
-                                  {'  '}
-                                  <Text as="span" variant="bodySm" tone="subdued">({swSalutation})</Text>
-                                </div>
-                                <Select
-                                  label="" labelHidden
-                                  options={(stateMappingOptions.salutations || []).map(o => ({ label: o.label, value: o.value }))}
-                                  value={sfSalutation}
-                                  onChange={(val) => {
-                                    setStateMappings(prev => ({ ...prev, salutations: { ...prev.salutations, [swSalutation]: val } }))
-                                    setStateMappingDirty(true)
-                                  }}
-                                />
-                              </div>
-                            ))
-                          )}
-                        </BlockStack>
-                      )}
-
-                  <Divider />
-
-                  <InlineStack gap="300" align="start" blockAlign="center">
-                    <Button
-                      variant="primary"
-                      loading={saveStateMappings.isPending}
-                      disabled={!stateMappingDirty}
-                      onClick={() => saveStateMappings.mutate({ mappings: stateMappings })}
-                    >
-                      Save mappings
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      disabled={!stateMappingDirty || saveStateMappings.isPending}
-                      onClick={() => {
-                        const data = stateMappingQuery.data
-                        if (data?.mappings) {
-                          setStateMappings(JSON.parse(JSON.stringify(data.mappings)))
-                          setStateMappingDirty(false)
-                        }
-                      }}
-                    >
-                      Reset to saved
-                    </Button>
-                    {stateMappingQuery.isFetching ? <Spinner size="small" /> : null}
-                  </InlineStack>
-
-                  <Banner tone="info">
-                    <p>Changes take effect on the next migration run. Values not listed here use the default fallback logic.</p>
+                    <InlineStack gap="300" align="space-between" blockAlign="center">
+                      <Button variant="secondary" onClick={() => setWizardStep(1)}>
+                        Previous
+                      </Button>
+                      <Button variant="primary" onClick={() => setWizardStep(3)}>
+                        Next
+                      </Button>
+                    </InlineStack>
+                  </BlockStack>
+                ) : (
+                  <Banner tone="warning">
+                    <p>Connect Magento first to load assignments.</p>
                   </Banner>
-
-                  <InlineStack gap="300" align="space-between" blockAlign="center">
-                    <Button variant="secondary" onClick={() => setWizardStep(1)}>
-                      Previous
-                    </Button>
-                    <Button variant="primary" onClick={() => setWizardStep(3)}>
-                      Next
-                    </Button>
-                  </InlineStack>
-                </BlockStack>
-              ) : (
-                <Banner tone="warning">
-                  <p>Connect Shopware first to load assignments.</p>
-                </Banner>
-              )}
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
         )}
 
         {/* Step 3: Migration Cards */}
@@ -2064,12 +1907,32 @@ function App() {
               </Card>
             </Layout.Section>
 
+            {/* ── Markets Migration ── */}
+            <Layout.Section>
+              <MarketsMigrationCard
+                connected={connected}
+                workerOnline={workerOnline}
+                marketRun={marketRun}
+                isMarketRunning={isMarketRunning}
+                marketPreview={marketPreview}
+                previewMarketMigration={previewMarketMigration}
+                startMarketMigration={startMarketMigration}
+                cancelMarketMigration={cancelMarketMigration}
+                handleDownloadReport={handleDownloadReport}
+                recentMarketFailedItems={recentMarketFailedItems}
+                marketSkippedCount={marketSkippedCount}
+                marketDurationLabel={marketDurationLabel}
+                confirmMarketStartOpen={confirmMarketStartOpen}
+                setConfirmMarketStartOpen={setConfirmMarketStartOpen}
+              />
+            </Layout.Section>
+
             <Layout.Section>
               <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="h2" variant="headingMd">
-                      4) Migrate manufacturers (vendors)
+                      5) Migrate manufacturers (vendors)
                     </Text>
                     <InlineStack gap="200">
                       {manufacturerRun?.report_available ? (
@@ -2077,16 +1940,74 @@ function App() {
                           Download CSV
                         </Button>
                       ) : null}
-                      {manufacturerRun?.pdf_available ? (
-                        <Button variant="primary" onClick={() => handleDownloadPdfReport(manufacturerRun)}>
-                          Download PDF
-                        </Button>
-                      ) : null}
                     </InlineStack>
                   </InlineStack>
                   <Text as="p" tone="subdued">
-                    Import Shopware manufacturers first. Product migration uses these as Shopify vendor names (run before products).
+                    Import Magento manufacturers first. Product migration uses these as Shopify vendor names (run before products).
                   </Text>
+
+                  {/* What gets migrated — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#f0f7ff' }}>
+                    <button
+                      type="button"
+                      onClick={() => setManufacturerMappingInfoOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#0070c0' }}>
+                        <span>ℹ</span> What gets migrated
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: manufacturerMappingInfoOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {manufacturerMappingInfoOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Manufacturers as Shopify Vendors</strong> — Magento manufacturers are migrated and mapped to Shopify vendor names.</List.Item>
+                          <List.Item><strong>Product Vendor Mapping</strong> — These names are assigned to the vendor attribute of migrated products.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Known limitations — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#fff8f0' }}>
+                    <button
+                      type="button"
+                      onClick={() => setManufacturerLimitationsOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#b98900' }}>
+                        <span>⚠</span> Known limitations
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: manufacturerLimitationsOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {manufacturerLimitationsOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>No dedicated Manufacturer entity</strong> — Shopify does not have a separate Manufacturer resource. They are simply text tags on products, so manufacturer descriptions, URLs, and logos are not migrated.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
 
                   <InlineStack gap="300" align="start" blockAlign="center">
                     <Button
@@ -2124,7 +2045,7 @@ function App() {
                         <Text as="h3" variant="headingSm">
                           Preview results
                         </Text>
-                        <Text as="p">Total (Shopware): {manufacturerPreview.total ?? '-'}</Text>
+                        <Text as="p">Total (Magento): {manufacturerPreview.total ?? '-'}</Text>
                         {manufacturerPreviewItems.length > 0 ? (
                           <List type="bullet">
                             {manufacturerPreviewItems.map((it) => (
@@ -2194,17 +2115,12 @@ function App() {
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
                     <Text as="h2" variant="headingMd">
-                      5) Migrate products + variants
+                      6) Migrate products + variants
                     </Text>
                     <InlineStack gap="200">
                       {run?.report_available ? (
                         <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(run)}>
                           Download CSV
-                        </Button>
-                      ) : null}
-                      {run?.pdf_available ? (
-                        <Button variant="primary" onClick={() => handleDownloadPdfReport(run)}>
-                          Download PDF
                         </Button>
                       ) : null}
                     </InlineStack>
@@ -2238,7 +2154,7 @@ function App() {
                           <List.Item><strong>Products &amp; Variants</strong> — fully migrated with titles, descriptions, options, values, price, SKU, barcode, and active status.</List.Item>
                           <List.Item><strong>Variant Images</strong> — parent and variant cover images are automatically downloaded and uploaded to Shopify.</List.Item>
                           <List.Item><strong>Inventory &amp; Quantities</strong> — stock levels are mapped to your selected Shopify location.</List.Item>
-                          <List.Item><strong>Taxes &amp; Taxable Flag</strong> — variants are flagged as taxable if the Shopware tax rate is greater than 0%.</List.Item>
+                          <List.Item><strong>Taxes &amp; Taxable Flag</strong> — variants are flagged as taxable if the Magento tax rate is greater than 0%.</List.Item>
                           <List.Item><strong>Price Mode (Gross/Net)</strong> — product prices are migrated according to your chosen price mode (gross or net).</List.Item>
                         </List>
                       </div>
@@ -2274,1465 +2190,1679 @@ function App() {
                           <List.Item><strong>Static Tax Rates</strong> (e.g. 19% or 7% rate name/percentage) are stored as product metafields (<code>tax_rate</code>, <code>tax_name</code>) for storefront reference, as Shopify variants do not natively store custom tax rate values.</List.Item>
                           <List.Item><strong>Multiple Currencies</strong> are mapped based on the primary shop currency. Individual market pricing can be adjusted in Shopify Markets.</List.Item>
                           <List.Item><strong>Advanced tier prices</strong> are synced, but dynamic rule-based pricing should be reviewed in Shopify Markets or via price lists.</List.Item>
+                          <List.Item><strong>Digital Files</strong> are migrated to Shopify's Files CDN and stored as clickable links in the <code>magento.download_links</code> metafield on products and variants. Native Shopify digital delivery setup is outside the scope of this implementation.</List.Item>
                         </List>
                       </div>
                     )}
                   </div>
 
-              <InlineStack gap="300" align="start" blockAlign="center">
-                <Button
-                  loading={previewMigration.isPending}
-                  disabled={!connected || !workerOnline || !locationGid || isRunning}
-                  onClick={() => {
-                    setPreview(null)
-                    previewMigration.mutate({ location_gid: locationGid, limit: 10, page: 1, include_payload: false })
-                  }}
-                >
-                  Preview (dry run)
-                </Button>
-                {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
-                {!locationGid ? <Text as="span" tone="subdued">Select a location to enable preview</Text> : null}
-                <Tooltip content="Migrate all products from Shopware.">
-                  <Button
-                    variant="primary"
-                    disabled={!canStart}
-                    loading={startMigration.isPending || isRunning}
-                    onClick={() => setConfirmStartOpen(true)}
-                  >
-                    Start migration
-                  </Button>
-                </Tooltip>
-                <Tooltip content="Migrate products created after a date or within a date range.">
-                  <Button
-                    variant="secondary"
-                    disabled={!canStartProductFiltered}
-                    loading={startFilteredProductMigration.isPending || isRunning}
-                    onClick={() => {
-                      setProductFilteredPreview(null)
-                      setProductFilteredModalOpen(true)
-                    }}
-                  >
-                    Migrate By Date
-                  </Button>
-                </Tooltip>
-                <Button variant="secondary" disabled={!isRunning} loading={cancelMigration.isPending} onClick={() => cancelMigration.mutate()}>
-                  Cancel
-                </Button>
-              </InlineStack>
-
-              <Box paddingBlockStart="300">
-                <InlineStack gap="300" align="start" blockAlign="center">
-                  <Button
-                    loading={previewRedirectMigration.isPending}
-                    disabled={!connected || !workerOnline}
-                    onClick={() => {
-                      setRedirectPreview(null)
-                      previewRedirectMigration.mutate({ limit: 20, page: 1 })
-                    }}
-                  >
-                    Preview 301 redirects
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    loading={importRedirectMigration.isPending}
-                    disabled={!connected || !workerOnline}
-                    onClick={() => importRedirectMigration.mutate({ limit: 20, page: 1 })}
-                  >
-                    Import 301 redirects
-                  </Button>
-                </InlineStack>
-                {redirectImportResult ? (
-                  <Box paddingBlockStart="200">
-                    <Text as="p" tone="subdued">
-                      Redirect import result: processed {redirectImportResult.processed ?? 0}, succeeded {redirectImportResult.succeeded ?? 0}, failed {redirectImportResult.failed ?? 0}
-                    </Text>
-                  </Box>
-                ) : null}
-                {redirectPreview && Array.isArray(redirectPreview.items) && redirectPreview.items.length > 0 ? (
-                  <Box paddingBlockStart="200">
-                    <Text as="p" fontWeight="semibold">Redirect preview (sample)</Text>
-                    <List type="bullet">
-                      {redirectPreview.items.slice(0, 10).map((it) => (
-                        <List.Item key={`${it.source_id}:${it.old_path}`}>
-                          <Text as="span">{it.old_path}{' -> '}{it.new_path}</Text>
-                        </List.Item>
-                      ))}
-                    </List>
-                  </Box>
-                ) : null}
-              </Box>
-
-              {/* Migrate By Date modal */}
-              <Modal
-                open={productFilteredModalOpen}
-                onClose={() => setProductFilteredModalOpen(false)}
-                title="Migrate products by created date"
-                primaryAction={{
-                  content: 'Preview filtered products',
-                  onAction: () => {
-                    setProductFilteredPreview(null)
-                    previewFilteredProductMigration.mutate({
-                      mode: productDateMode,
-                      after: productAfterDate || null,
-                      before: productBeforeDate || null,
-                      location_gid: locationGid,
-                      limit: 10,
-                      page: 1,
-                    })
-                  },
-                }}
-                secondaryActions={[{ content: 'Close', onAction: () => setProductFilteredModalOpen(false) }]}
-              >
-                <Modal.Section>
-                  <BlockStack gap="300">
-                    <Select
-                      label="Filter mode"
-                      options={[
-                        { label: 'After a date', value: 'after' },
-                        { label: 'Between two dates', value: 'between' },
-                      ]}
-                      value={productDateMode}
-                      onChange={(v) => setProductDateMode(v)}
-                    />
-                    {(productDateMode === 'after' || productDateMode === 'between') ? (
-                      <Box onClick={() => productAfterInputRef.current?.showPicker?.()} onFocusCapture={() => productAfterInputRef.current?.showPicker?.()}>
-                        <TextField
-                          label="After (YYYY-MM-DD)"
-                          type="date"
-                          value={productAfterDate}
-                          onChange={(v) => setProductAfterDate(v)}
-                          inputRef={productAfterInputRef}
-                          autoComplete="off"
-                        />
-                      </Box>
-                    ) : null}
-                    {productDateMode === 'between' ? (
-                      <Box onClick={() => productBeforeInputRef.current?.showPicker?.()} onFocusCapture={() => productBeforeInputRef.current?.showPicker?.()}>
-                        <TextField
-                          label="Before (YYYY-MM-DD)"
-                          type="date"
-                          value={productBeforeDate}
-                          onChange={(v) => setProductBeforeDate(v)}
-                          inputRef={productBeforeInputRef}
-                          autoComplete="off"
-                        />
-                      </Box>
-                    ) : null}
-                    {previewFilteredProductMigration.isPending ? (
-                      <InlineStack gap="200" align="start" blockAlign="center">
-                        <Spinner size="small" />
-                        <Text as="span">Fetching total…</Text>
-                      </InlineStack>
-                    ) : null}
-                    {productFilteredPreviewTotal != null ? (
-                      <Banner status="info" title="Filtered total">
-                        <p>Total products matching filter (Shopware): {productFilteredPreviewTotal}</p>
-                      </Banner>
-                    ) : null}
+                  <InlineStack gap="300" align="start" blockAlign="center">
                     <Button
-                      variant="primary"
-                      disabled={productFilteredPreviewTotal == null || productFilteredPreviewTotal <= 0}
-                      onClick={() => setConfirmProductFilteredStartOpen(true)}
+                      loading={previewMigration.isPending}
+                      disabled={!connected || !workerOnline || !locationGid || isRunning}
+                      onClick={() => {
+                        setPreview(null)
+                        previewMigration.mutate({ location_gid: locationGid, limit: 10, page: 1, include_payload: false })
+                      }}
                     >
-                      Continue to start filtered migration
+                      Preview (dry run)
                     </Button>
-                  </BlockStack>
-                </Modal.Section>
-              </Modal>
+                    {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
+                    {!locationGid ? <Text as="span" tone="subdued">Select a location to enable preview</Text> : null}
+                    <Tooltip content="Migrate all products from Magento.">
+                      <Button
+                        variant="primary"
+                        disabled={!canStart}
+                        loading={startMigration.isPending || isRunning}
+                        onClick={() => setConfirmStartOpen(true)}
+                      >
+                        Start migration
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content="Migrate products created after a date or within a date range.">
+                      <Button
+                        variant="secondary"
+                        disabled={!canStartProductFiltered}
+                        loading={startFilteredProductMigration.isPending || isRunning}
+                        onClick={() => {
+                          setProductFilteredPreview(null)
+                          setProductFilteredModalOpen(true)
+                        }}
+                      >
+                        Migrate By Date
+                      </Button>
+                    </Tooltip>
+                    <Button variant="secondary" disabled={!isRunning} loading={cancelMigration.isPending} onClick={() => cancelMigration.mutate()}>
+                      Cancel
+                    </Button>
+                  </InlineStack>
 
-              {/* Confirm filtered start modal */}
-              <Modal
-                open={confirmProductFilteredStartOpen}
-                onClose={() => setConfirmProductFilteredStartOpen(false)}
-                title="Start filtered product migration?"
-                primaryAction={{
-                  content: 'Start filtered migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmProductFilteredStartOpen(false)
-                    setProductFilteredModalOpen(false)
-                    startFilteredProductMigration.mutate({
-                      mode: productDateMode,
-                      after: productAfterDate || null,
-                      before: productBeforeDate || null,
-                      location_gid: locationGid,
-                    })
-                  },
-                }}
-                secondaryActions={[{ content: 'Cancel', onAction: () => setConfirmProductFilteredStartOpen(false) }]}
-              >
-                <Modal.Section>
-                  <Text as="p">This will migrate products that match your date filter.</Text>
-                  {productFilteredPreviewTotal != null ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="p" tone="subdued">Matching products (Shopware): {productFilteredPreviewTotal}</Text>
-                    </Box>
-                  ) : null}
-                </Modal.Section>
-              </Modal>
-
-              {isFinishedSuccess ? (
-                <Banner status="success" title="Migration completed">
-                  <p>
-                    Migrated {run.succeeded} products successfully. You can now review them in Shopify Admin.
-                  </p>
-                </Banner>
-              ) : null}
-
-              {isFinishedNoChanges ? (
-                <Banner status="info" title="No changes detected">
-                  <p>
-                    This run checked {skippedCount} products and skipped them because the mapped data is unchanged.
-                  </p>
-                </Banner>
-              ) : null}
-
-              {preview ? (
-                <Card background="bg-surface-secondary">
-                  <BlockStack gap="200">
-                    <Text as="h3" variant="headingSm">
-                      Preview results
-                    </Text>
-                    <Text as="p">Page: {preview.page ?? '-'}</Text>
-                    <Text as="p">Total (Shopware): {preview.total ?? '-'}</Text>
-
-                    {previewItems.length > 0 ? (
-                      <List type="bullet">
-                        {previewItems.map((it) => {
-                          const issues = Array.isArray(it?.issues) ? it.issues : []
-                          const sample = Array.isArray(it?.child_sample) ? it.child_sample : []
-                          const cats = Array.isArray(it?.categories) ? it.categories : []
-                          const vSample = it?.variant_sample && typeof it.variant_sample === 'object' ? it.variant_sample : null
-                          return (
-                            <List.Item key={it.source_id}>
-                              <Text as="span" fontWeight="semibold">
-                                {it.title || it.source_id}
-                              </Text>
-                              <Text as="span">
-                                {' '}
-                                — Shopware children: {it.shopware_child_count ?? '-'}; mapped variants: {it.variant_count ?? '-'} (expected:{' '}
-                                {it.expected_variant_count ?? '-'})
-                              </Text>
-                              <Box paddingBlockStart="100">
-                                <Text as="p" tone="subdued">
-                                  Vendor: {it.vendor || '-'}; Type: {it.product_type || '-'}; SEO: {it.seo_present ? 'Yes' : 'No'}; Media:{' '}
-                                  {it.media_count ?? 0} (cover: {it.has_cover ? 'Yes' : 'No'}); Categories: {cats.length}
-                                </Text>
-                              </Box>
-                              {vSample ? (
-                                <Box paddingBlockStart="100">
-                                  <Text as="p" tone="subdued">
-                                    Variant sample — SKU: {vSample.sku || '-'}; Price: {vSample.price || '-'}; Qty: {vSample.qty ?? '-'}; Weight:{' '}
-                                    {vSample.weight ?? '-'}
-                                  </Text>
-                                </Box>
-                              ) : null}
-                              {sample.length > 0 ? (
-                                <Box paddingBlockStart="100">
-                                  <Text as="p" tone="subdued">
-                                    Sample variants: {sample.map((s) => s?.sku || s?.id).filter(Boolean).join(', ')}
-                                  </Text>
-                                </Box>
-                              ) : null}
-                              {issues.length > 0 ? (
-                                <Box paddingBlockStart="100">
-                                  <Text as="p" tone="critical">
-                                    Issues: {issues.join(' | ')}
-                                  </Text>
-                                </Box>
-                              ) : null}
+                  <Box paddingBlockStart="300">
+                    <InlineStack gap="300" align="start" blockAlign="center">
+                      <Button
+                        loading={previewRedirectMigration.isPending}
+                        disabled={!connected || !workerOnline}
+                        onClick={() => {
+                          setRedirectPreview(null)
+                          previewRedirectMigration.mutate({ limit: 20, page: 1 })
+                        }}
+                      >
+                        Preview 301 redirects
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        loading={importRedirectMigration.isPending}
+                        disabled={!connected || !workerOnline}
+                        onClick={() => importRedirectMigration.mutate({ limit: 20, page: 1 })}
+                      >
+                        Import 301 redirects
+                      </Button>
+                    </InlineStack>
+                    {redirectImportResult ? (
+                      <Box paddingBlockStart="200">
+                        <Text as="p" tone="subdued">
+                          Redirect import result: processed {redirectImportResult.processed ?? 0}, succeeded {redirectImportResult.succeeded ?? 0}, failed {redirectImportResult.failed ?? 0}
+                        </Text>
+                      </Box>
+                    ) : null}
+                    {redirectPreview && Array.isArray(redirectPreview.items) && redirectPreview.items.length > 0 ? (
+                      <Box paddingBlockStart="200">
+                        <Text as="p" fontWeight="semibold">Redirect preview (sample)</Text>
+                        <List type="bullet">
+                          {redirectPreview.items.slice(0, 10).map((it) => (
+                            <List.Item key={`${it.source_id}:${it.old_path}`}>
+                              <Text as="span">{it.old_path}{' -> '}{it.new_path}</Text>
                             </List.Item>
-                          )
-                        })}
-                      </List>
-                    ) : (
-                      <Text as="p">No items returned for this page.</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              ) : null}
-
-              <Modal
-                open={confirmStartOpen}
-                onClose={() => setConfirmStartOpen(false)}
-                title="Ready to start migration?"
-                primaryAction={{
-                  content: 'Start migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmStartOpen(false)
-                    startMigration.mutate()
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">
-                    We’ll start syncing your Shopware catalog into Shopify (products, variants, inventory, images, and collections).
-                  </Text>
-                  <Box paddingBlockStart="200">
-                    <Text as="p" tone="subdued">
-                      Before you continue, we recommend:
-                    </Text>
-                    <Box paddingBlockStart="100">
-                      <List type="bullet">
-                        <List.Item>Run <Text as="span" fontWeight="semibold">Preview (dry run)</Text> to review counts and key fields.</List.Item>
-                        <List.Item>Export your current Shopify products CSV (Products → Export) as a baseline.</List.Item>
-                      </List>
-                    </Box>
-                    <Box paddingBlockStart="200">
-                      <Text as="p" tone="subdued">
-                        You can safely cancel the migration while it’s running from this screen.
-                      </Text>
-                    </Box>
+                          ))}
+                        </List>
+                      </Box>
+                    ) : null}
                   </Box>
-                </Modal.Section>
-              </Modal>
 
-              <Card background="bg-surface-secondary">
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">
-                    Status
-                  </Text>
-                  <Text as="p">Run: {run ? `#${run.id}` : '-'}</Text>
-                  <Text as="p">State: {run ? run.status : '-'}</Text>
-                  {durationLabel ? (
-                    <Text as="p">
-                      {isRunning ? 'Elapsed: ' : 'Total time: '}
-                      {durationLabel}
-                    </Text>
-                  ) : null}
-                  <Text as="p">Processed: {run ? run.processed : 0}</Text>
-                  <Text as="p">Succeeded: {run ? run.succeeded : 0}</Text>
-                  <Text as="p">Failed: {run ? run.failed : 0}</Text>
-                  {run ? <Text as="p">Skipped: {skippedCount}</Text> : null}
-
-                  {recentFailedItems.length > 0 ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="h4" variant="headingSm">
-                        Recent failures
-                      </Text>
-                      <List type="bullet">
-                        {recentFailedItems.map((it) => (
-                          <List.Item key={it.id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              —
-                              {(() => {
-                                const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
-                                const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
-                                const userErrMsg = ctx?.userErrors?.[0]?.message || null
-                                return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
-                              })()}
-                            </Text>
-                          </List.Item>
-                        ))}
-                      </List>
-                    </Box>
-                  ) : null}
-                </BlockStack>
-              </Card>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">
-                  6) Migrate customers
-                </Text>
-                <InlineStack gap="200">
-                  {customerRun?.report_available ? (
-                    <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(customerRun)}>
-                      Download CSV
-                    </Button>
-                  ) : null}
-                  {customerRun?.pdf_available ? (
-                    <Button variant="primary" onClick={() => handleDownloadPdfReport(customerRun)}>
-                      Download PDF
-                    </Button>
-                  ) : null}
-                </InlineStack>
-              </InlineStack>
-
-              <InlineStack gap="300" align="start" blockAlign="center">
-                <Button
-                  loading={previewCustomerMigration.isPending}
-                  disabled={!connected || !workerOnline || isCustomerRunning}
-                  onClick={() => {
-                    setCustomerPreview(null)
-                    setExpandedCustomerPreviewId(null)
-                    previewCustomerMigration.mutate({ limit: 10, page: 1, include_payload: true })
-                  }}
-                >
-                  Preview (dry run)
-                </Button>
-                {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
-                <Tooltip content="Migrates all customers from Shopware (no date filter).">
-                  <Button
-                    variant="primary"
-                    disabled={!canStartCustomers}
-                    loading={startCustomerMigration.isPending || isCustomerRunning}
-                    onClick={() => setConfirmCustomerStartOpen(true)}
-                  >
-                    Start customer migration
-                  </Button>
-                </Tooltip>
-
-                <Tooltip content="Migrate customers created within a selected date filter (after, before, or between dates).">
-                  <Button
-                    variant="secondary"
-                    disabled={!canStartCustomerFiltered}
-                    loading={startFilteredCustomerMigration.isPending || isCustomerRunning}
-                    onClick={() => {
-                      setCustomerFilteredPreview(null)
-                      setCustomerFilteredModalOpen(true)
-                    }}
-                    style={{
-                      background: 'var(--p-color-bg-surface-info)',
-                      borderColor: 'var(--p-color-border-info)',
-                      color: 'var(--p-color-text)',
-                    }}
-                  >
-                    Migrate By Date
-                  </Button>
-                </Tooltip>
-                <Button
-                  variant="secondary"
-                  disabled={!isCustomerRunning}
-                  loading={cancelCustomerMigration.isPending}
-                  onClick={() => cancelCustomerMigration.mutate()}
-                >
-                  Cancel
-                </Button>
-              </InlineStack>
-
-              <Modal
-                open={customerFilteredModalOpen}
-                onClose={() => setCustomerFilteredModalOpen(false)}
-                title="Migrate customers by created date"
-                primaryAction={{
-                  content: 'Preview filtered customers',
-                  onAction: () => {
-                    setCustomerFilteredPreview(null)
-                    previewFilteredCustomerMigration.mutate({
-                      mode: customerDateMode,
-                      after: customerAfterDate || null,
-                      before: customerBeforeDate || null,
-                      limit: 10,
-                      page: 1,
-                      include_payload: false,
-                    })
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Close',
-                    onAction: () => setCustomerFilteredModalOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <BlockStack gap="300">
-                    <Select
-                      label="Filter mode"
-                      options={[
-                        { label: 'After a date', value: 'after' },
-                        { label: 'Between two dates', value: 'between' },
-                      ]}
-                      value={customerDateMode}
-                      onChange={(v) => setCustomerDateMode(v)}
-                    />
-
-                    {(customerDateMode === 'after' || customerDateMode === 'between') ? (
-                      <Box
-                        onClick={() => customerAfterInputRef.current?.showPicker?.()}
-                        onFocusCapture={() => customerAfterInputRef.current?.showPicker?.()}
+                  <Box paddingBlockStart="300">
+                    <InlineStack gap="300" align="start" blockAlign="center">
+                      <Button
+                        loading={previewCollectionRedirectMigration.isPending}
+                        disabled={!connected || !workerOnline}
+                        onClick={() => {
+                          setCollectionRedirectPreview(null)
+                          previewCollectionRedirectMigration.mutate({ limit: 20, page: 1 })
+                        }}
                       >
-                        <TextField
-                          label="After (YYYY-MM-DD)"
-                          type="date"
-                          value={customerAfterDate}
-                          onChange={(v) => setCustomerAfterDate(v)}
-                          inputRef={customerAfterInputRef}
-                          autoComplete="off"
-                        />
-                      </Box>
-                    ) : null}
-
-                    {customerDateMode === 'between' ? (
-                      <Box
-                        onClick={() => customerBeforeInputRef.current?.showPicker?.()}
-                        onFocusCapture={() => customerBeforeInputRef.current?.showPicker?.()}
+                        Preview collection 301 redirects
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        loading={importCollectionRedirectMigration.isPending}
+                        disabled={!connected || !workerOnline}
+                        onClick={() => importCollectionRedirectMigration.mutate({ limit: 20, page: 1 })}
                       >
-                        <TextField
-                          label="Before (YYYY-MM-DD)"
-                          type="date"
-                          value={customerBeforeDate}
-                          onChange={(v) => setCustomerBeforeDate(v)}
-                          inputRef={customerBeforeInputRef}
-                          autoComplete="off"
-                        />
+                        Import collection 301 redirects
+                      </Button>
+                    </InlineStack>
+                    {collectionRedirectImportResult ? (
+                      <Box paddingBlockStart="200">
+                        <Text as="p" tone="subdued">
+                          Collection redirect import result: processed {collectionRedirectImportResult.processed ?? 0}, succeeded {collectionRedirectImportResult.succeeded ?? 0}, failed {collectionRedirectImportResult.failed ?? 0}
+                        </Text>
                       </Box>
                     ) : null}
-
-                    {previewFilteredCustomerMigration.isPending ? (
-                      <InlineStack gap="200" align="start" blockAlign="center">
-                        <Spinner size="small" />
-                        <Text as="span">Fetching total…</Text>
-                      </InlineStack>
+                    {collectionRedirectPreview && Array.isArray(collectionRedirectPreview.items) && collectionRedirectPreview.items.length > 0 ? (
+                      <Box paddingBlockStart="200">
+                        <Text as="p" fontWeight="semibold">Collection redirect preview (sample)</Text>
+                        <List type="bullet">
+                          {collectionRedirectPreview.items.slice(0, 10).map((it) => (
+                            <List.Item key={`${it.source_id}:${it.old_path}`}>
+                              <Text as="span">{it.old_path}{' -> '}{it.new_path}</Text>
+                            </List.Item>
+                          ))}
+                        </List>
+                      </Box>
                     ) : null}
-
-                    {customerFilteredPreviewTotal != null ? (
-                      <Banner status="info" title="Filtered total">
-                        <p>Total customers matching filter (Shopware): {customerFilteredPreviewTotal}</p>
-                      </Banner>
-                    ) : null}
-
-                    <Button
-                      variant="primary"
-                      disabled={customerFilteredPreviewTotal == null || customerFilteredPreviewTotal <= 0}
-                      onClick={() => setConfirmCustomerFilteredStartOpen(true)}
-                    >
-                      Continue to start filtered migration
-                    </Button>
-                  </BlockStack>
-                </Modal.Section>
-              </Modal>
-
-              <Modal
-                open={confirmCustomerFilteredStartOpen}
-                onClose={() => setConfirmCustomerFilteredStartOpen(false)}
-                title="Start filtered customer migration?"
-                primaryAction={{
-                  content: 'Start filtered migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmCustomerFilteredStartOpen(false)
-                    setCustomerFilteredModalOpen(false)
-                    startFilteredCustomerMigration.mutate({
-                      mode: customerDateMode,
-                      after: customerAfterDate || null,
-                      before: customerBeforeDate || null,
-                    })
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmCustomerFilteredStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">
-                    This will migrate customers that match your date filter.
-                  </Text>
-                  {customerFilteredPreviewTotal != null ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="p" tone="subdued">
-                        Matching customers (Shopware): {customerFilteredPreviewTotal}
-                      </Text>
-                    </Box>
-                  ) : null}
-                </Modal.Section>
-              </Modal>
-
-              {isCustomerFinishedSuccess ? (
-                <Banner status="success" title="Customer migration completed">
-                  <p>
-                    Migrated {customerRun.succeeded} customers successfully. You can now review them in Shopify Admin.
-                  </p>
-                </Banner>
-              ) : null}
-
-              {isCustomerFinishedNoChanges ? (
-                <Banner status="info" title="No changes detected">
-                  <p>
-                    This run checked {customerSkippedCount} customers and skipped them because the mapped data is unchanged.
-                  </p>
-                </Banner>
-              ) : null}
-
-              {customerPreview ? (
-                <Card background="bg-surface-secondary">
-                  <BlockStack gap="200">
-                    <Text as="h3" variant="headingSm">
-                      Preview results
-                    </Text>
-                    <Text as="p">Page: {customerPreview.page ?? '-'}</Text>
-                    <Text as="p">Total (Shopware): {customerPreview.total ?? '-'}</Text>
-
-                    {customerPreviewItems.length > 0 ? (
-                      <List type="bullet">
-                        {customerPreviewItems.map((it) => (
-                          <List.Item key={it.source_id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.email || it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              — {it.first_name || '-'} {it.last_name || '-'}; addresses: {it.addresses_count ?? 0}
-                            </Text>
-
-                            {it.payload || it.shopware_raw || it.shopware_metafields ? (
-                              <Box paddingBlockStart="150">
-                                <ButtonGroup>
-                                  <Button
-                                    size="micro"
-                                    onClick={() =>
-                                      setExpandedCustomerPreviewId((prev) => (prev === it.source_id ? null : it.source_id))
-                                    }
-                                  >
-                                    {expandedCustomerPreviewId === it.source_id ? 'Hide details' : 'Show details'}
-                                  </Button>
-                                </ButtonGroup>
-                                {expandedCustomerPreviewId === it.source_id ? (
-                                  <Box paddingBlockStart="150">
-                                    {it.payload ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopify payload
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.payload, null, 2)}
-                                          </pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
-
-                                    {it.shopware_metafields ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopware metafields
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.shopware_metafields, null, 2)}
-                                          </pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
-
-                                    {it.shopware_raw ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopware raw
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.shopware_raw, null, 2)}
-                                          </pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
-                                  </Box>
-                                ) : null}
-                              </Box>
-                            ) : null}
-                          </List.Item>
-                        ))}
-                      </List>
-                    ) : (
-                      <Text as="p">No items returned for this page.</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              ) : null}
-
-              <Modal
-                open={confirmCustomerStartOpen}
-                onClose={() => setConfirmCustomerStartOpen(false)}
-                title="Ready to start customer migration?"
-                primaryAction={{
-                  content: 'Start customer migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmCustomerStartOpen(false)
-                    startCustomerMigration.mutate()
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmCustomerStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">We’ll start syncing your Shopware customers into Shopify.</Text>
-                  <Box paddingBlockStart="200">
-                    <Text as="p" tone="subdued">
-                      Before you continue, we recommend running <Text as="span" fontWeight="semibold">Preview (dry run)</Text>.
-                    </Text>
                   </Box>
-                </Modal.Section>
-              </Modal>
 
-              <Card background="bg-surface-secondary">
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">
-                    Status
-                  </Text>
-                  <Text as="p">Run: {customerRun ? `#${customerRun.id}` : '-'}</Text>
-                  <Text as="p">State: {customerRun ? customerRun.status : '-'}</Text>
-                  {customerDurationLabel ? (
-                    <Text as="p">
-                      {isCustomerRunning ? 'Elapsed: ' : 'Total time: '}
-                      {customerDurationLabel}
-                    </Text>
+                  {/* Migrate By Date modal */}
+                  <Modal
+                    open={productFilteredModalOpen}
+                    onClose={() => setProductFilteredModalOpen(false)}
+                    title="Migrate products by created date"
+                    primaryAction={{
+                      content: 'Preview filtered products',
+                      onAction: () => {
+                        setProductFilteredPreview(null)
+                        previewFilteredProductMigration.mutate({
+                          mode: productDateMode,
+                          after: productAfterDate || null,
+                          before: productBeforeDate || null,
+                          location_gid: locationGid,
+                          limit: 10,
+                          page: 1,
+                        })
+                      },
+                    }}
+                    secondaryActions={[{ content: 'Close', onAction: () => setProductFilteredModalOpen(false) }]}
+                  >
+                    <Modal.Section>
+                      <BlockStack gap="300">
+                        <Select
+                          label="Filter mode"
+                          options={[
+                            { label: 'After a date', value: 'after' },
+                            { label: 'Between two dates', value: 'between' },
+                          ]}
+                          value={productDateMode}
+                          onChange={(v) => setProductDateMode(v)}
+                        />
+                        {(productDateMode === 'after' || productDateMode === 'between') ? (
+                          <Box onClick={() => productAfterInputRef.current?.showPicker?.()} onFocusCapture={() => productAfterInputRef.current?.showPicker?.()}>
+                            <TextField
+                              label="After (YYYY-MM-DD)"
+                              type="date"
+                              value={productAfterDate}
+                              onChange={(v) => setProductAfterDate(v)}
+                              inputRef={productAfterInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+                        {productDateMode === 'between' ? (
+                          <Box onClick={() => productBeforeInputRef.current?.showPicker?.()} onFocusCapture={() => productBeforeInputRef.current?.showPicker?.()}>
+                            <TextField
+                              label="Before (YYYY-MM-DD)"
+                              type="date"
+                              value={productBeforeDate}
+                              onChange={(v) => setProductBeforeDate(v)}
+                              inputRef={productBeforeInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+                        {previewFilteredProductMigration.isPending ? (
+                          <InlineStack gap="200" align="start" blockAlign="center">
+                            <Spinner size="small" />
+                            <Text as="span">Fetching total…</Text>
+                          </InlineStack>
+                        ) : null}
+                        {productFilteredPreviewTotal != null ? (
+                          <Banner status="info" title="Filtered total">
+                            <p>Total products matching filter (Magento): {productFilteredPreviewTotal}</p>
+                          </Banner>
+                        ) : null}
+                        <Button
+                          variant="primary"
+                          disabled={productFilteredPreviewTotal == null || productFilteredPreviewTotal <= 0}
+                          onClick={() => setConfirmProductFilteredStartOpen(true)}
+                        >
+                          Continue to start filtered migration
+                        </Button>
+                      </BlockStack>
+                    </Modal.Section>
+                  </Modal>
+
+                  {/* Confirm filtered start modal */}
+                  <Modal
+                    open={confirmProductFilteredStartOpen}
+                    onClose={() => setConfirmProductFilteredStartOpen(false)}
+                    title="Start filtered product migration?"
+                    primaryAction={{
+                      content: 'Start filtered migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmProductFilteredStartOpen(false)
+                        setProductFilteredModalOpen(false)
+                        startFilteredProductMigration.mutate({
+                          mode: productDateMode,
+                          after: productAfterDate || null,
+                          before: productBeforeDate || null,
+                          location_gid: locationGid,
+                        })
+                      },
+                    }}
+                    secondaryActions={[{ content: 'Cancel', onAction: () => setConfirmProductFilteredStartOpen(false) }]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">This will migrate products that match your date filter.</Text>
+                      {productFilteredPreviewTotal != null ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="p" tone="subdued">Matching products (Magento): {productFilteredPreviewTotal}</Text>
+                        </Box>
+                      ) : null}
+                    </Modal.Section>
+                  </Modal>
+
+                  {isFinishedSuccess ? (
+                    <Banner status="success" title="Migration completed">
+                      <p>
+                        Migrated {run.succeeded} products successfully. You can now review them in Shopify Admin.
+                      </p>
+                    </Banner>
                   ) : null}
-                  <Text as="p">Processed: {customerRun ? customerRun.processed : 0}</Text>
-                  <Text as="p">Succeeded: {customerRun ? customerRun.succeeded : 0}</Text>
-                  <Text as="p">Failed: {customerRun ? customerRun.failed : 0}</Text>
-                  {customerRun ? <Text as="p">Skipped: {customerSkippedCount}</Text> : null}
 
-                  {recentCustomerFailedItems.length > 0 ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="h4" variant="headingSm">
-                        Recent failures
+                  {isFinishedNoChanges ? (
+                    <Banner status="info" title="No changes detected">
+                      <p>
+                        This run checked {skippedCount} products and skipped them because the mapped data is unchanged.
+                      </p>
+                    </Banner>
+                  ) : null}
+
+                  {preview ? (
+                    <Card background="bg-surface-secondary">
+                      <BlockStack gap="200">
+                        <Text as="h3" variant="headingSm">
+                          Preview results
+                        </Text>
+                        <Text as="p">Page: {preview.page ?? '-'}</Text>
+                        <Text as="p">Total (Magento): {preview.total ?? '-'}</Text>
+
+                        {previewItems.length > 0 ? (
+                          <List type="bullet">
+                            {previewItems.map((it) => {
+                              const issues = Array.isArray(it?.issues) ? it.issues : []
+                              const sample = Array.isArray(it?.child_sample) ? it.child_sample : []
+                              const cats = Array.isArray(it?.categories) ? it.categories : []
+                              const vSample = it?.variant_sample && typeof it.variant_sample === 'object' ? it.variant_sample : null
+                              return (
+                                <List.Item key={it.source_id}>
+                                  <Text as="span" fontWeight="semibold">
+                                    {it.title || it.source_id}
+                                  </Text>
+                                  <Text as="span">
+                                    {' '}
+                                    — Magento children: {it.magento_child_count ?? '-'}; mapped variants: {it.variant_count ?? '-'} (expected:{' '}
+                                    {it.expected_variant_count ?? '-'})
+                                  </Text>
+                                  <Box paddingBlockStart="100">
+                                    <Text as="p" tone="subdued">
+                                      Vendor: {it.vendor || '-'}; Type: {it.product_type || '-'}; SEO: {it.seo_present ? 'Yes' : 'No'}; Media:{' '}
+                                      {it.media_count ?? 0} (cover: {it.has_cover ? 'Yes' : 'No'}); Categories: {cats.length}
+                                    </Text>
+                                  </Box>
+                                  {vSample ? (
+                                    <Box paddingBlockStart="100">
+                                      <Text as="p" tone="subdued">
+                                        Variant sample — SKU: {vSample.sku || '-'}; Price: {vSample.price || '-'}; Qty: {vSample.qty ?? '-'}; Weight:{' '}
+                                        {vSample.weight ?? '-'}
+                                      </Text>
+                                    </Box>
+                                  ) : null}
+                                  {sample.length > 0 ? (
+                                    <Box paddingBlockStart="100">
+                                      <Text as="p" tone="subdued">
+                                        Sample variants: {sample.map((s) => s?.sku || s?.id).filter(Boolean).join(', ')}
+                                      </Text>
+                                    </Box>
+                                  ) : null}
+                                  {issues.length > 0 ? (
+                                    <Box paddingBlockStart="100">
+                                      <Text as="p" tone="critical">
+                                        Issues: {issues.join(' | ')}
+                                      </Text>
+                                    </Box>
+                                  ) : null}
+                                </List.Item>
+                              )
+                            })}
+                          </List>
+                        ) : (
+                          <Text as="p">No items returned for this page.</Text>
+                        )}
+                      </BlockStack>
+                    </Card>
+                  ) : null}
+
+                  <Modal
+                    open={confirmStartOpen}
+                    onClose={() => setConfirmStartOpen(false)}
+                    title="Ready to start migration?"
+                    primaryAction={{
+                      content: 'Start migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmStartOpen(false)
+                        startMigration.mutate()
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">
+                        We’ll start syncing your Magento catalog into Shopify (products, variants, inventory, images, and collections).
                       </Text>
-                      <List type="bullet">
-                        {recentCustomerFailedItems.map((it) => (
-                          <List.Item key={it.id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              —
-                              {(() => {
-                                const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
-                                const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
-                                const userErrMsg = ctx?.userErrors?.[0]?.message || null
-                                return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
-                              })()}
-                            </Text>
-                          </List.Item>
-                        ))}
-                      </List>
-                    </Box>
-                  ) : null}
+                      <Box paddingBlockStart="200">
+                        <Text as="p" tone="subdued">
+                          Before you continue, we recommend:
+                        </Text>
+                        <Box paddingBlockStart="100">
+                          <List type="bullet">
+                            <List.Item>Run <Text as="span" fontWeight="semibold">Preview (dry run)</Text> to review counts and key fields.</List.Item>
+                            <List.Item>Export your current Shopify products CSV (Products → Export) as a baseline.</List.Item>
+                          </List>
+                        </Box>
+                        <Box paddingBlockStart="200">
+                          <Text as="p" tone="subdued">
+                            You can safely cancel the migration while it’s running from this screen.
+                          </Text>
+                        </Box>
+                      </Box>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Card background="bg-surface-secondary">
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Status
+                      </Text>
+                      <Text as="p">Run: {run ? `#${run.id}` : '-'}</Text>
+                      <Text as="p">State: {run ? run.status : '-'}</Text>
+                      {durationLabel ? (
+                        <Text as="p">
+                          {isRunning ? 'Elapsed: ' : 'Total time: '}
+                          {durationLabel}
+                        </Text>
+                      ) : null}
+                      <Text as="p">Processed: {run ? run.processed : 0}</Text>
+                      <Text as="p">Succeeded: {run ? run.succeeded : 0}</Text>
+                      <Text as="p">Failed: {run ? run.failed : 0}</Text>
+                      {run ? <Text as="p">Skipped: {skippedCount}</Text> : null}
+
+                      {recentFailedItems.length > 0 ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="h4" variant="headingSm">
+                            Recent failures
+                          </Text>
+                          <List type="bullet">
+                            {recentFailedItems.map((it) => (
+                              <List.Item key={it.id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  —
+                                  {(() => {
+                                    const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
+                                    const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
+                                    const userErrMsg = ctx?.userErrors?.[0]?.message || null
+                                    return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
+                                  })()}
+                                </Text>
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Box>
+                      ) : null}
+                    </BlockStack>
+                  </Card>
                 </BlockStack>
               </Card>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+            </Layout.Section>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">
-                  7) Migrate orders
-                </Text>
-                <InlineStack gap="200">
-                  {orderRun?.report_available ? (
-                    <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(orderRun)}>
-                      Download CSV
-                    </Button>
-                  ) : null}
-                  {orderRun?.pdf_available ? (
-                    <Button variant="primary" onClick={() => handleDownloadPdfReport(orderRun)}>
-                      Download PDF
-                    </Button>
-                  ) : null}
-                </InlineStack>
-              </InlineStack>
-
-              <InlineStack gap="300" align="start" blockAlign="center">
-                <Button
-                  loading={previewOrderMigration.isPending}
-                  disabled={!connected || !workerOnline || isOrderRunning}
-                  onClick={() => {
-                    setOrderPreview(null)
-                    setExpandedOrderPreviewId(null)
-                    previewOrderMigration.mutate({ limit: 10, page: 1, include_payload: true })
-                  }}
-                >
-                  Preview (dry run)
-                </Button>
-                {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
-                <Tooltip content="Start a full order migration (all orders).">
-                  <Button
-                    variant="primary"
-                    disabled={!canStartOrders}
-                    loading={startOrderMigration.isPending || isOrderRunning}
-                    onClick={() => setConfirmOrderStartOpen(true)}
-                  >
-                    Start order migration
-                  </Button>
-                </Tooltip>
-
-                <Tooltip content="Migrate orders after a date or within a date range.">
-                  <Button
-                    variant="secondary"
-                    disabled={!canStartOrderFiltered}
-                    loading={startFilteredOrderMigration.isPending || isOrderRunning}
-                    onClick={() => {
-                      setOrderFilteredPreview(null)
-                      setOrderFilteredModalOpen(true)
-                    }}
-                    style={{
-                      background: 'var(--p-color-bg-surface-info)',
-                      borderColor: 'var(--p-color-border-info)',
-                      color: 'var(--p-color-text)',
-                    }}
-                  >
-                    Migrate By Date
-                  </Button>
-                </Tooltip>
-                <Button
-                  variant="secondary"
-                  disabled={!isOrderRunning}
-                  loading={cancelOrderMigration.isPending}
-                  onClick={() => cancelOrderMigration.mutate()}
-                >
-                  Cancel
-                </Button>
-              </InlineStack>
-
-              <Modal
-                open={orderFilteredModalOpen}
-                onClose={() => setOrderFilteredModalOpen(false)}
-                title="Migrate orders by order date"
-                primaryAction={{
-                  content: 'Preview filtered orders',
-                  onAction: () => {
-                    setOrderFilteredPreview(null)
-                    previewFilteredOrderMigration.mutate({
-                      mode: orderDateMode,
-                      after: orderAfterDate || null,
-                      before: orderBeforeDate || null,
-                      limit: 10,
-                      page: 1,
-                      include_payload: false,
-                    })
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Close',
-                    onAction: () => setOrderFilteredModalOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <BlockStack gap="300">
-                    <Select
-                      label="Filter mode"
-                      options={[
-                        { label: 'After a date', value: 'after' },
-                        { label: 'Between two dates', value: 'between' },
-                      ]}
-                      value={orderDateMode}
-                      onChange={(v) => setOrderDateMode(v)}
-                    />
-
-                    {(orderDateMode === 'after' || orderDateMode === 'between') ? (
-                      <Box onClick={() => orderAfterInputRef.current?.showPicker?.()} onFocusCapture={() => orderAfterInputRef.current?.showPicker?.()}>
-                        <TextField
-                          label="After (YYYY-MM-DD)"
-                          type="date"
-                          value={orderAfterDate}
-                          onChange={(v) => setOrderAfterDate(v)}
-                          inputRef={orderAfterInputRef}
-                          autoComplete="off"
-                        />
-                      </Box>
-                    ) : null}
-
-                    {orderDateMode === 'between' ? (
-                      <Box onClick={() => orderBeforeInputRef.current?.showPicker?.()} onFocusCapture={() => orderBeforeInputRef.current?.showPicker?.()}>
-                        <TextField
-                          label="Before (YYYY-MM-DD)"
-                          type="date"
-                          value={orderBeforeDate}
-                          onChange={(v) => setOrderBeforeDate(v)}
-                          inputRef={orderBeforeInputRef}
-                          autoComplete="off"
-                        />
-                      </Box>
-                    ) : null}
-
-                    {previewFilteredOrderMigration.isPending ? (
-                      <InlineStack gap="200" align="start" blockAlign="center">
-                        <Spinner size="small" />
-                        <Text as="span">Fetching total…</Text>
-                      </InlineStack>
-                    ) : null}
-
-                    {orderFilteredPreviewTotal != null ? (
-                      <Banner status="info" title="Filtered total">
-                        <p>Total orders matching filter (Shopware): {orderFilteredPreviewTotal}</p>
-                      </Banner>
-                    ) : null}
-
-                    <Button
-                      variant="primary"
-                      disabled={orderFilteredPreviewTotal == null || orderFilteredPreviewTotal <= 0}
-                      onClick={() => setConfirmOrderFilteredStartOpen(true)}
-                    >
-                      Continue to start filtered migration
-                    </Button>
-                  </BlockStack>
-                </Modal.Section>
-              </Modal>
-
-              <Modal
-                open={confirmOrderFilteredStartOpen}
-                onClose={() => setConfirmOrderFilteredStartOpen(false)}
-                title="Start filtered order migration?"
-                primaryAction={{
-                  content: 'Start filtered migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmOrderFilteredStartOpen(false)
-                    setOrderFilteredModalOpen(false)
-                    startFilteredOrderMigration.mutate({
-                      location_gid: locationGid,
-                      mode: orderDateMode,
-                      after: orderAfterDate || null,
-                      before: orderBeforeDate || null,
-                    })
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmOrderFilteredStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">This will migrate orders that match your date filter.</Text>
-                  {orderFilteredPreviewTotal != null ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="p" tone="subdued">Matching orders (Shopware): {orderFilteredPreviewTotal}</Text>
-                    </Box>
-                  ) : null}
-                </Modal.Section>
-              </Modal>
-
-              {connected && workerOnline && !orderPrerequisitesReady && !isOrderRunning ? (
-                <Banner status="warning" title="Order migration prerequisites required">
-                  {orderPrerequisiteMessages.length > 0 ? (
-                    <List type="bullet">
-                      {orderPrerequisiteMessages.map((message) => (
-                        <List.Item key={message}>{message}</List.Item>
-                      ))}
-                    </List>
-                  ) : (
-                    <p>Complete product and customer migration before migrating orders.</p>
-                  )}
-                </Banner>
-              ) : null}
-
-              {isOrderFinishedSuccess ? (
-                <Banner status="success" title="Order migration completed">
-                  <p>
-                    Migrated {orderRun.succeeded} orders successfully. You can now review them in Shopify Admin.
-                  </p>
-                </Banner>
-              ) : null}
-
-              {isOrderFinishedNoChanges ? (
-                <Banner status="info" title="No changes detected">
-                  <p>This run did not create new orders.</p>
-                </Banner>
-              ) : null}
-
-              {orderPreview ? (
-                <Card background="bg-surface-secondary">
-                  <BlockStack gap="200">
-                    <Text as="h3" variant="headingSm">
-                      Preview results
+            <Layout.Section>
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      7) Migrate customers
                     </Text>
-                    <Text as="p">Page: {orderPreview.page ?? '-'}</Text>
-                    <Text as="p">Total (Shopware): {orderPreview.total ?? '-'}</Text>
+                    <InlineStack gap="200">
+                      {customerRun?.report_available ? (
+                        <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(customerRun)}>
+                          Download CSV
+                        </Button>
+                      ) : null}
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" tone="subdued">
+                    Migrate Magento customers and their address book into Shopify.
+                  </Text>
 
-                    {orderPreviewItems.length > 0 ? (
-                      <List type="bullet">
-                        {orderPreviewItems.map((it) => (
-                          <List.Item key={it.source_id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.order_number || it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              — {it.email || '-'}; items: {it.line_items_count ?? 0}; {it.currency || '-'}
-                            </Text>
+                  {/* What gets migrated — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#f0f7ff' }}>
+                    <button
+                      type="button"
+                      onClick={() => setCustomerMappingInfoOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#0070c0' }}>
+                        <span>ℹ</span> What gets migrated
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: customerMappingInfoOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {customerMappingInfoOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Customer Profiles</strong> — Migrates first name, last name, email, phone number, and account state.</List.Item>
+                          <List.Item><strong>Addresses</strong> — Default billing and default shipping addresses are migrated and assigned to the customer profile.</List.Item>
+                          <List.Item><strong>Metadata</strong> — Companies and VAT registration IDs (where applicable) are mapped to customer details.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
 
-                            {it.payload || it.shopware_raw || it.shopware_metafields ? (
-                              <Box paddingBlockStart="150">
-                                <ButtonGroup>
-                                  <Button
-                                    size="micro"
-                                    onClick={() =>
-                                      setExpandedOrderPreviewId((prev) => (prev === it.source_id ? null : it.source_id))
-                                    }
-                                  >
-                                    {expandedOrderPreviewId === it.source_id ? 'Hide details' : 'Show details'}
-                                  </Button>
-                                </ButtonGroup>
-                                {expandedOrderPreviewId === it.source_id ? (
+                  {/* Known limitations — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#fff8f0' }}>
+                    <button
+                      type="button"
+                      onClick={() => setCustomerLimitationsOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#b98900' }}>
+                        <span>⚠</span> Known limitations
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: customerLimitationsOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {customerLimitationsOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Passwords cannot be migrated</strong> — due to secure hashing, passwords cannot be transferred. Customers will need to set a new password or activate their accounts upon first login.</List.Item>
+                          <List.Item><strong>Unique Email Constraint</strong> — Shopify requires unique email addresses. Duplicate emails in Magento will be skipped or merged.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
+
+                  <InlineStack gap="300" align="start" blockAlign="center">
+                    <Button
+                      loading={previewCustomerMigration.isPending}
+                      disabled={!connected || !workerOnline || isCustomerRunning}
+                      onClick={() => {
+                        setCustomerPreview(null)
+                        setExpandedCustomerPreviewId(null)
+                        previewCustomerMigration.mutate({ limit: 10, page: 1, include_payload: true })
+                      }}
+                    >
+                      Preview (dry run)
+                    </Button>
+                    {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
+                    <Tooltip content="Migrates all customers from Magento (no date filter).">
+                      <Button
+                        variant="primary"
+                        disabled={!canStartCustomers}
+                        loading={startCustomerMigration.isPending || isCustomerRunning}
+                        onClick={() => setConfirmCustomerStartOpen(true)}
+                      >
+                        Start customer migration
+                      </Button>
+                    </Tooltip>
+
+                    <Tooltip content="Migrate customers created within a selected date filter (after, before, or between dates).">
+                      <Button
+                        variant="secondary"
+                        disabled={!canStartCustomerFiltered}
+                        loading={startFilteredCustomerMigration.isPending || isCustomerRunning}
+                        onClick={() => {
+                          setCustomerFilteredPreview(null)
+                          setCustomerFilteredModalOpen(true)
+                        }}
+                        style={{
+                          background: 'var(--p-color-bg-surface-info)',
+                          borderColor: 'var(--p-color-border-info)',
+                          color: 'var(--p-color-text)',
+                        }}
+                      >
+                        Migrate By Date
+                      </Button>
+                    </Tooltip>
+                    <Button
+                      variant="secondary"
+                      disabled={!isCustomerRunning}
+                      loading={cancelCustomerMigration.isPending}
+                      onClick={() => cancelCustomerMigration.mutate()}
+                    >
+                      Cancel
+                    </Button>
+                  </InlineStack>
+
+                  <Modal
+                    open={customerFilteredModalOpen}
+                    onClose={() => setCustomerFilteredModalOpen(false)}
+                    title="Migrate customers by created date"
+                    primaryAction={{
+                      content: 'Preview filtered customers',
+                      onAction: () => {
+                        setCustomerFilteredPreview(null)
+                        previewFilteredCustomerMigration.mutate({
+                          mode: customerDateMode,
+                          after: customerAfterDate || null,
+                          before: customerBeforeDate || null,
+                          limit: 10,
+                          page: 1,
+                          include_payload: false,
+                        })
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Close',
+                        onAction: () => setCustomerFilteredModalOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <BlockStack gap="300">
+                        <Select
+                          label="Filter mode"
+                          options={[
+                            { label: 'After a date', value: 'after' },
+                            { label: 'Between two dates', value: 'between' },
+                          ]}
+                          value={customerDateMode}
+                          onChange={(v) => setCustomerDateMode(v)}
+                        />
+
+                        {(customerDateMode === 'after' || customerDateMode === 'between') ? (
+                          <Box
+                            onClick={() => customerAfterInputRef.current?.showPicker?.()}
+                            onFocusCapture={() => customerAfterInputRef.current?.showPicker?.()}
+                          >
+                            <TextField
+                              label="After (YYYY-MM-DD)"
+                              type="date"
+                              value={customerAfterDate}
+                              onChange={(v) => setCustomerAfterDate(v)}
+                              inputRef={customerAfterInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+
+                        {customerDateMode === 'between' ? (
+                          <Box
+                            onClick={() => customerBeforeInputRef.current?.showPicker?.()}
+                            onFocusCapture={() => customerBeforeInputRef.current?.showPicker?.()}
+                          >
+                            <TextField
+                              label="Before (YYYY-MM-DD)"
+                              type="date"
+                              value={customerBeforeDate}
+                              onChange={(v) => setCustomerBeforeDate(v)}
+                              inputRef={customerBeforeInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+
+                        {previewFilteredCustomerMigration.isPending ? (
+                          <InlineStack gap="200" align="start" blockAlign="center">
+                            <Spinner size="small" />
+                            <Text as="span">Fetching total…</Text>
+                          </InlineStack>
+                        ) : null}
+
+                        {customerFilteredPreviewTotal != null ? (
+                          <Banner status="info" title="Filtered total">
+                            <p>Total customers matching filter (Magento): {customerFilteredPreviewTotal}</p>
+                          </Banner>
+                        ) : null}
+
+                        <Button
+                          variant="primary"
+                          disabled={customerFilteredPreviewTotal == null || customerFilteredPreviewTotal <= 0}
+                          onClick={() => setConfirmCustomerFilteredStartOpen(true)}
+                        >
+                          Continue to start filtered migration
+                        </Button>
+                      </BlockStack>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Modal
+                    open={confirmCustomerFilteredStartOpen}
+                    onClose={() => setConfirmCustomerFilteredStartOpen(false)}
+                    title="Start filtered customer migration?"
+                    primaryAction={{
+                      content: 'Start filtered migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmCustomerFilteredStartOpen(false)
+                        setCustomerFilteredModalOpen(false)
+                        startFilteredCustomerMigration.mutate({
+                          mode: customerDateMode,
+                          after: customerAfterDate || null,
+                          before: customerBeforeDate || null,
+                        })
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmCustomerFilteredStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">
+                        This will migrate customers that match your date filter.
+                      </Text>
+                      {customerFilteredPreviewTotal != null ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="p" tone="subdued">
+                            Matching customers (Magento): {customerFilteredPreviewTotal}
+                          </Text>
+                        </Box>
+                      ) : null}
+                    </Modal.Section>
+                  </Modal>
+
+                  {isCustomerFinishedSuccess ? (
+                    <Banner status="success" title="Customer migration completed">
+                      <p>
+                        Migrated {customerRun.succeeded} customers successfully. You can now review them in Shopify Admin.
+                      </p>
+                    </Banner>
+                  ) : null}
+
+                  {isCustomerFinishedNoChanges ? (
+                    <Banner status="info" title="No changes detected">
+                      <p>
+                        This run checked {customerSkippedCount} customers and skipped them because the mapped data is unchanged.
+                      </p>
+                    </Banner>
+                  ) : null}
+
+                  {customerPreview ? (
+                    <Card background="bg-surface-secondary">
+                      <BlockStack gap="200">
+                        <Text as="h3" variant="headingSm">
+                          Preview results
+                        </Text>
+                        <Text as="p">Page: {customerPreview.page ?? '-'}</Text>
+                        <Text as="p">Total (Magento): {customerPreview.total ?? '-'}</Text>
+
+                        {customerPreviewItems.length > 0 ? (
+                          <List type="bullet">
+                            {customerPreviewItems.map((it) => (
+                              <List.Item key={it.source_id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.email || it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  — {it.first_name || '-'} {it.last_name || '-'}; addresses: {it.addresses_count ?? 0}
+                                </Text>
+
+                                {it.payload || it.magento_raw || it.magento_metafields ? (
                                   <Box paddingBlockStart="150">
-                                    {it.payload ? (
+                                    <ButtonGroup>
+                                      <Button
+                                        size="micro"
+                                        onClick={() =>
+                                          setExpandedCustomerPreviewId((prev) => (prev === it.source_id ? null : it.source_id))
+                                        }
+                                      >
+                                        {expandedCustomerPreviewId === it.source_id ? 'Hide details' : 'Show details'}
+                                      </Button>
+                                    </ButtonGroup>
+                                    {expandedCustomerPreviewId === it.source_id ? (
                                       <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopify payload
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.payload, null, 2)}
-                                          </pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
+                                        {it.payload ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Shopify payload
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.payload, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
 
-                                    {it.shopware_metafields ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopware metafields
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.shopware_metafields, null, 2)}
-                                          </pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
+                                        {it.magento_metafields ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Magento metafields
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.magento_metafields, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
 
-                                    {it.shopware_raw ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopware raw
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                            {JSON.stringify(it.shopware_raw, null, 2)}
-                                          </pre>
-                                        </Box>
+                                        {it.magento_raw ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Magento raw
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.magento_raw, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
                                       </Box>
                                     ) : null}
                                   </Box>
                                 ) : null}
-                              </Box>
-                            ) : null}
-                          </List.Item>
-                        ))}
-                      </List>
-                    ) : (
-                      <Text as="p">No items returned for this page.</Text>
-                    )}
-                  </BlockStack>
-                </Card>
-              ) : null}
-
-              <Modal
-                open={confirmOrderStartOpen}
-                onClose={() => setConfirmOrderStartOpen(false)}
-                title="Ready to start order migration?"
-                primaryAction={{
-                  content: 'Start order migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmOrderStartOpen(false)
-                    startOrderMigration.mutate()
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmOrderStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">We’ll start creating orders in Shopify based on your Shopware order history.</Text>
-                  <Box paddingBlockStart="200">
-                    <Text as="p" tone="subdued">
-                      Before you continue, we recommend running <Text as="span" fontWeight="semibold">Preview (dry run)</Text> and validating the mapped
-                      totals, addresses, and line items.
-                    </Text>
-                  </Box>
-                </Modal.Section>
-              </Modal>
-
-              <Card background="bg-surface-secondary">
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">
-                    Status
-                  </Text>
-                  <Text as="p">Run: {orderRun ? `#${orderRun.id}` : '-'}</Text>
-                  <Text as="p">State: {orderRun ? orderRun.status : '-'}</Text>
-                  {orderDurationLabel ? (
-                    <Text as="p">
-                      {isOrderRunning ? 'Elapsed: ' : 'Total time: '}
-                      {orderDurationLabel}
-                    </Text>
+                              </List.Item>
+                            ))}
+                          </List>
+                        ) : (
+                          <Text as="p">No items returned for this page.</Text>
+                        )}
+                      </BlockStack>
+                    </Card>
                   ) : null}
-                  <Text as="p">Processed: {orderRun ? orderRun.processed : 0}</Text>
-                  <Text as="p">Succeeded: {orderRun ? orderRun.succeeded : 0}</Text>
-                  <Text as="p">Failed: {orderRun ? orderRun.failed : 0}</Text>
-                  {orderRun ? <Text as="p">Skipped: {orderSkippedCount}</Text> : null}
 
-                  {recentOrderFailedItems.length > 0 ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="h4" variant="headingSm">
-                        Recent failures
+                  <Modal
+                    open={confirmCustomerStartOpen}
+                    onClose={() => setConfirmCustomerStartOpen(false)}
+                    title="Ready to start customer migration?"
+                    primaryAction={{
+                      content: 'Start customer migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmCustomerStartOpen(false)
+                        startCustomerMigration.mutate()
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmCustomerStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">We’ll start syncing your Magento customers into Shopify.</Text>
+                      <Box paddingBlockStart="200">
+                        <Text as="p" tone="subdued">
+                          Before you continue, we recommend running <Text as="span" fontWeight="semibold">Preview (dry run)</Text>.
+                        </Text>
+                      </Box>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Card background="bg-surface-secondary">
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Status
                       </Text>
-                      <List type="bullet">
-                        {recentOrderFailedItems.map((it) => (
-                          <List.Item key={it.id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              —
-                              {(() => {
-                                const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
-                                const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
-                                const userErrMsg = ctx?.userErrors?.[0]?.message || null
-                                return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
-                              })()}
-                            </Text>
-                          </List.Item>
-                        ))}
-                      </List>
-                    </Box>
-                  ) : null}
+                      <Text as="p">Run: {customerRun ? `#${customerRun.id}` : '-'}</Text>
+                      <Text as="p">State: {customerRun ? customerRun.status : '-'}</Text>
+                      {customerDurationLabel ? (
+                        <Text as="p">
+                          {isCustomerRunning ? 'Elapsed: ' : 'Total time: '}
+                          {customerDurationLabel}
+                        </Text>
+                      ) : null}
+                      <Text as="p">Processed: {customerRun ? customerRun.processed : 0}</Text>
+                      <Text as="p">Succeeded: {customerRun ? customerRun.succeeded : 0}</Text>
+                      <Text as="p">Failed: {customerRun ? customerRun.failed : 0}</Text>
+                      {customerRun ? <Text as="p">Skipped: {customerSkippedCount}</Text> : null}
+
+                      {recentCustomerFailedItems.length > 0 ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="h4" variant="headingSm">
+                            Recent failures
+                          </Text>
+                          <List type="bullet">
+                            {recentCustomerFailedItems.map((it) => (
+                              <List.Item key={it.id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  —
+                                  {(() => {
+                                    const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
+                                    const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
+                                    const userErrMsg = ctx?.userErrors?.[0]?.message || null
+                                    return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
+                                  })()}
+                                </Text>
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Box>
+                      ) : null}
+                    </BlockStack>
+                  </Card>
                 </BlockStack>
               </Card>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+            </Layout.Section>
 
-        <Layout.Section>
-          <Card>
-            <BlockStack gap="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <Text as="h2" variant="headingMd">
-                  8) Migrate newsletter recipients
-                </Text>
-                <InlineStack gap="200">
-                  {newsletterRun?.report_available ? (
-                    <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(newsletterRun)}>
-                      Download CSV
-                    </Button>
-                  ) : null}
-                  {newsletterRun?.pdf_available ? (
-                    <Button variant="primary" onClick={() => handleDownloadPdfReport(newsletterRun)}>
-                      Download PDF
-                    </Button>
-                  ) : null}
-                </InlineStack>
-              </InlineStack>
-
-              {connected && workerOnline && !newsletterPrerequisitesReady && !isNewsletterRunning ? (
-                <Banner status="warning" title="Newsletter migration prerequisites required">
-                  {newsletterPrerequisiteMessages.length > 0 ? (
-                    <List type="bullet">
-                      {newsletterPrerequisiteMessages.map((message) => (
-                        <List.Item key={message}>{message}</List.Item>
-                      ))}
-                    </List>
-                  ) : (
-                    <p>Complete customer migration before migrating newsletter recipients.</p>
-                  )}
-                </Banner>
-              ) : null}
-
-              <InlineStack gap="300" align="start" blockAlign="center">
-                <Button
-                  loading={previewNewsletterMigration.isPending}
-                  disabled={!connected || !workerOnline || isNewsletterRunning}
-                  onClick={() => {
-                    setNewsletterPreview(null)
-                    setExpandedNewsletterPreviewId(null)
-                    previewNewsletterMigration.mutate({ limit: 10, page: 1, include_payload: true })
-                  }}
-                >
-                  Preview (dry run)
-                </Button>
-                {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
-                <Button
-                  variant="primary"
-                  disabled={!canStartNewsletter}
-                  loading={startNewsletterMigration.isPending || isNewsletterRunning}
-                  onClick={() => setConfirmNewsletterStartOpen(true)}
-                >
-                  Start newsletter migration
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={!isNewsletterRunning}
-                  loading={cancelNewsletterMigration.isPending}
-                  onClick={() => cancelNewsletterMigration.mutate()}
-                >
-                  Cancel
-                </Button>
-              </InlineStack>
-
-              {newsletterPreview ? (
-                <Card background="bg-surface-secondary">
-                  <BlockStack gap="200">
-                    <Text as="h3" variant="headingSm">
-                      Preview results
+            <Layout.Section>
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      8) Migrate orders
                     </Text>
-                    <Text as="p">Page: {newsletterPreview.page ?? '-'}</Text>
-                    <Text as="p">Total (Shopware): {newsletterPreview.total ?? '-'}</Text>
+                    <InlineStack gap="200">
+                      {orderRun?.report_available ? (
+                        <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(orderRun)}>
+                          Download CSV
+                        </Button>
+                      ) : null}
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" tone="subdued">
+                    Migrate historical Magento orders including line items, billing/shipping addresses, and transaction status.
+                  </Text>
 
-                    {newsletterPreviewItems.length > 0 ? (
-                      <List type="bullet">
-                        {newsletterPreviewItems.map((it) => (
-                          <List.Item key={it.source_id || it.email}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.email || it.source_id || '-'}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              — {it.active ? 'Active' : 'Inactive'}
-                            </Text>
-
-                            {it.payload || it.shopware_raw ? (
-                              <Box paddingBlockStart="150">
-                                <ButtonGroup>
-                                  <Button
-                                    size="micro"
-                                    onClick={() =>
-                                      setExpandedNewsletterPreviewId((prev) => (prev === (it.source_id || it.email) ? null : it.source_id || it.email))
-                                    }
-                                  >
-                                    {expandedNewsletterPreviewId === (it.source_id || it.email) ? 'Hide details' : 'Show details'}
-                                  </Button>
-                                </ButtonGroup>
-                                {expandedNewsletterPreviewId === (it.source_id || it.email) ? (
-                                  <Box paddingBlockStart="150">
-                                    {it.payload ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopify payload
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(it.payload, null, 2)}</pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
-
-                                    {it.shopware_raw ? (
-                                      <Box paddingBlockStart="150">
-                                        <Text as="p" tone="subdued">
-                                          Shopware raw
-                                        </Text>
-                                        <Box
-                                          padding="200"
-                                          background="bg-surface"
-                                          borderColor="border"
-                                          borderWidth="025"
-                                          borderRadius="200"
-                                          overflowX="scroll"
-                                        >
-                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(it.shopware_raw, null, 2)}</pre>
-                                        </Box>
-                                      </Box>
-                                    ) : null}
-                                  </Box>
-                                ) : null}
-                              </Box>
-                            ) : null}
-                          </List.Item>
-                        ))}
-                      </List>
-                    ) : (
-                      <Text as="p">No items returned for this page.</Text>
+                  {/* What gets migrated — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#f0f7ff' }}>
+                    <button
+                      type="button"
+                      onClick={() => setOrderMappingInfoOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#0070c0' }}>
+                        <span>ℹ</span> What gets migrated
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: orderMappingInfoOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {orderMappingInfoOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Order Details</strong> — Order number, creation date, subtotal, total, and taxes.</List.Item>
+                          <List.Item><strong>Line Items</strong> — Products, variants, quantities, unit prices, and applied taxes.</List.Item>
+                          <List.Item><strong>Status Mappings</strong> — Financial (payment) status and fulfillment status are mapped based on your configuration.</List.Item>
+                          <List.Item><strong>Shipping &amp; Payments</strong> — Shipping costs, methods, and payment gateway references.</List.Item>
+                        </List>
+                      </div>
                     )}
-                  </BlockStack>
-                </Card>
-              ) : null}
+                  </div>
 
-              <Modal
-                open={confirmNewsletterStartOpen}
-                onClose={() => setConfirmNewsletterStartOpen(false)}
-                title="Ready to start newsletter migration?"
-                primaryAction={{
-                  content: 'Start newsletter migration',
-                  destructive: true,
-                  onAction: () => {
-                    setConfirmNewsletterStartOpen(false)
-                    startNewsletterMigration.mutate()
-                  },
-                }}
-                secondaryActions={[
-                  {
-                    content: 'Cancel',
-                    onAction: () => setConfirmNewsletterStartOpen(false),
-                  },
-                ]}
-              >
-                <Modal.Section>
-                  <Text as="p">
-                    We’ll sync Shopware newsletter recipients into Shopify Customers and set Email subscription based on their active status.
-                  </Text>
-                </Modal.Section>
-              </Modal>
+                  {/* Known limitations — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#fff8f0' }}>
+                    <button
+                      type="button"
+                      onClick={() => setOrderLimitationsOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#b98900' }}>
+                        <span>⚠</span> Known limitations
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: orderLimitationsOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {orderLimitationsOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Archived Orders</strong> — Historical orders are created in Shopify as archived and read-only.</List.Item>
+                          <List.Item><strong>Inventory Adjustment</strong> — Migrating past orders does not automatically decrement current inventory levels.</List.Item>
+                          <List.Item><strong>Payment Gateways</strong> — Raw transaction tokens or gateway actions cannot be recreated in Shopify; payment is marked as recorded.</List.Item>
+                          <List.Item><strong>Catalog Dependencies</strong> — Orders containing products/variants not previously migrated will fail to import or be created with custom line items.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
 
-              <Card background="bg-surface-secondary">
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">
-                    Status
-                  </Text>
-                  <Text as="p">Run: {newsletterRun ? `#${newsletterRun.id}` : '-'}</Text>
-                  <Text as="p">State: {newsletterRun ? newsletterRun.status : '-'}</Text>
-                  {newsletterDurationLabel ? <Text as="p">Total time: {newsletterDurationLabel}</Text> : null}
-                  <Text as="p">Processed: {newsletterRun ? newsletterRun.processed : 0}</Text>
-                  <Text as="p">Succeeded: {newsletterRun ? newsletterRun.succeeded : 0}</Text>
-                  <Text as="p">Failed: {newsletterRun ? newsletterRun.failed : 0}</Text>
-                  {newsletterRun ? (
-                    <Text as="p">
-                      Skipped:{' '}
-                      {Math.max(
-                        0,
-                        Number(newsletterRun.processed || 0) - Number(newsletterRun.succeeded || 0) - Number(newsletterRun.failed || 0)
+                  <InlineStack gap="300" align="start" blockAlign="center">
+                    <Button
+                      loading={previewOrderMigration.isPending}
+                      disabled={!connected || !workerOnline || isOrderRunning}
+                      onClick={() => {
+                        setOrderPreview(null)
+                        setExpandedOrderPreviewId(null)
+                        previewOrderMigration.mutate({ limit: 10, page: 1, include_payload: true })
+                      }}
+                    >
+                      Preview (dry run)
+                    </Button>
+                    {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
+                    <Tooltip content="Start a full order migration (all orders).">
+                      <Button
+                        variant="primary"
+                        disabled={!canStartOrders}
+                        loading={startOrderMigration.isPending || isOrderRunning}
+                        onClick={() => setConfirmOrderStartOpen(true)}
+                      >
+                        Start order migration
+                      </Button>
+                    </Tooltip>
+
+                    <Tooltip content="Migrate orders after a date or within a date range.">
+                      <Button
+                        variant="secondary"
+                        disabled={!canStartOrderFiltered}
+                        loading={startFilteredOrderMigration.isPending || isOrderRunning}
+                        onClick={() => {
+                          setOrderFilteredPreview(null)
+                          setOrderFilteredModalOpen(true)
+                        }}
+                        style={{
+                          background: 'var(--p-color-bg-surface-info)',
+                          borderColor: 'var(--p-color-border-info)',
+                          color: 'var(--p-color-text)',
+                        }}
+                      >
+                        Migrate By Date
+                      </Button>
+                    </Tooltip>
+                    <Button
+                      variant="secondary"
+                      disabled={!isOrderRunning}
+                      loading={cancelOrderMigration.isPending}
+                      onClick={() => cancelOrderMigration.mutate()}
+                    >
+                      Cancel
+                    </Button>
+                  </InlineStack>
+
+                  <Modal
+                    open={orderFilteredModalOpen}
+                    onClose={() => setOrderFilteredModalOpen(false)}
+                    title="Migrate orders by order date"
+                    primaryAction={{
+                      content: 'Preview filtered orders',
+                      onAction: () => {
+                        setOrderFilteredPreview(null)
+                        previewFilteredOrderMigration.mutate({
+                          mode: orderDateMode,
+                          after: orderAfterDate || null,
+                          before: orderBeforeDate || null,
+                          limit: 10,
+                          page: 1,
+                          include_payload: false,
+                        })
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Close',
+                        onAction: () => setOrderFilteredModalOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <BlockStack gap="300">
+                        <Select
+                          label="Filter mode"
+                          options={[
+                            { label: 'After a date', value: 'after' },
+                            { label: 'Between two dates', value: 'between' },
+                          ]}
+                          value={orderDateMode}
+                          onChange={(v) => setOrderDateMode(v)}
+                        />
+
+                        {(orderDateMode === 'after' || orderDateMode === 'between') ? (
+                          <Box onClick={() => orderAfterInputRef.current?.showPicker?.()} onFocusCapture={() => orderAfterInputRef.current?.showPicker?.()}>
+                            <TextField
+                              label="After (YYYY-MM-DD)"
+                              type="date"
+                              value={orderAfterDate}
+                              onChange={(v) => setOrderAfterDate(v)}
+                              inputRef={orderAfterInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+
+                        {orderDateMode === 'between' ? (
+                          <Box onClick={() => orderBeforeInputRef.current?.showPicker?.()} onFocusCapture={() => orderBeforeInputRef.current?.showPicker?.()}>
+                            <TextField
+                              label="Before (YYYY-MM-DD)"
+                              type="date"
+                              value={orderBeforeDate}
+                              onChange={(v) => setOrderBeforeDate(v)}
+                              inputRef={orderBeforeInputRef}
+                              autoComplete="off"
+                            />
+                          </Box>
+                        ) : null}
+
+                        {previewFilteredOrderMigration.isPending ? (
+                          <InlineStack gap="200" align="start" blockAlign="center">
+                            <Spinner size="small" />
+                            <Text as="span">Fetching total…</Text>
+                          </InlineStack>
+                        ) : null}
+
+                        {orderFilteredPreviewTotal != null ? (
+                          <Banner status="info" title="Filtered total">
+                            <p>Total orders matching filter (Magento): {orderFilteredPreviewTotal}</p>
+                          </Banner>
+                        ) : null}
+
+                        <Button
+                          variant="primary"
+                          disabled={orderFilteredPreviewTotal == null || orderFilteredPreviewTotal <= 0}
+                          onClick={() => setConfirmOrderFilteredStartOpen(true)}
+                        >
+                          Continue to start filtered migration
+                        </Button>
+                      </BlockStack>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Modal
+                    open={confirmOrderFilteredStartOpen}
+                    onClose={() => setConfirmOrderFilteredStartOpen(false)}
+                    title="Start filtered order migration?"
+                    primaryAction={{
+                      content: 'Start filtered migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmOrderFilteredStartOpen(false)
+                        setOrderFilteredModalOpen(false)
+                        startFilteredOrderMigration.mutate({
+                          location_gid: locationGid,
+                          mode: orderDateMode,
+                          after: orderAfterDate || null,
+                          before: orderBeforeDate || null,
+                        })
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmOrderFilteredStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">This will migrate orders that match your date filter.</Text>
+                      {orderFilteredPreviewTotal != null ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="p" tone="subdued">Matching orders (Magento): {orderFilteredPreviewTotal}</Text>
+                        </Box>
+                      ) : null}
+                    </Modal.Section>
+                  </Modal>
+
+                  {connected && workerOnline && !orderPrerequisitesReady && !isOrderRunning ? (
+                    <Banner status="warning" title="Order migration prerequisites required">
+                      {orderPrerequisiteMessages.length > 0 ? (
+                        <List type="bullet">
+                          {orderPrerequisiteMessages.map((message) => (
+                            <List.Item key={message}>{message}</List.Item>
+                          ))}
+                        </List>
+                      ) : (
+                        <p>Complete product and customer migration before migrating orders.</p>
                       )}
-                    </Text>
+                    </Banner>
                   ) : null}
 
-                  {recentNewsletterFailedItems.length > 0 ? (
-                    <Box paddingBlockStart="200">
-                      <Text as="h4" variant="headingSm">
-                        Recent failures
-                      </Text>
-                      <List type="bullet">
-                        {recentNewsletterFailedItems.map((it) => (
-                          <List.Item key={it.id}>
-                            <Text as="span" fontWeight="semibold">
-                              {it.source_id}
-                            </Text>
-                            <Text as="span">
-                              {' '}
-                              —
-                              {(() => {
-                                const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
-                                const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
-                                const userErrMsg = ctx?.userErrors?.[0]?.message || null
-                                return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
-                              })()}
-                            </Text>
-                          </List.Item>
-                        ))}
-                      </List>
-                    </Box>
+                  {isOrderFinishedSuccess ? (
+                    <Banner status="success" title="Order migration completed">
+                      <p>
+                        Migrated {orderRun.succeeded} orders successfully. You can now review them in Shopify Admin.
+                      </p>
+                    </Banner>
                   ) : null}
+
+                  {isOrderFinishedNoChanges ? (
+                    <Banner status="info" title="No changes detected">
+                      <p>This run did not create new orders.</p>
+                    </Banner>
+                  ) : null}
+
+                  {orderPreview ? (
+                    <Card background="bg-surface-secondary">
+                      <BlockStack gap="200">
+                        <Text as="h3" variant="headingSm">
+                          Preview results
+                        </Text>
+                        <Text as="p">Page: {orderPreview.page ?? '-'}</Text>
+                        <Text as="p">Total (Magento): {orderPreview.total ?? '-'}</Text>
+
+                        {orderPreviewItems.length > 0 ? (
+                          <List type="bullet">
+                            {orderPreviewItems.map((it) => (
+                              <List.Item key={it.source_id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.order_number || it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  — {it.email || '-'}; items: {it.line_items_count ?? 0}; {it.currency || '-'}
+                                </Text>
+
+                                {it.payload || it.magento_raw || it.magento_metafields ? (
+                                  <Box paddingBlockStart="150">
+                                    <ButtonGroup>
+                                      <Button
+                                        size="micro"
+                                        onClick={() =>
+                                          setExpandedOrderPreviewId((prev) => (prev === it.source_id ? null : it.source_id))
+                                        }
+                                      >
+                                        {expandedOrderPreviewId === it.source_id ? 'Hide details' : 'Show details'}
+                                      </Button>
+                                    </ButtonGroup>
+                                    {expandedOrderPreviewId === it.source_id ? (
+                                      <Box paddingBlockStart="150">
+                                        {it.payload ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Shopify payload
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.payload, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
+
+                                        {it.magento_metafields ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Magento metafields
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.magento_metafields, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
+
+                                        {it.magento_raw ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Magento raw
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(it.magento_raw, null, 2)}
+                                              </pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
+                                      </Box>
+                                    ) : null}
+                                  </Box>
+                                ) : null}
+                              </List.Item>
+                            ))}
+                          </List>
+                        ) : (
+                          <Text as="p">No items returned for this page.</Text>
+                        )}
+                      </BlockStack>
+                    </Card>
+                  ) : null}
+
+                  <Modal
+                    open={confirmOrderStartOpen}
+                    onClose={() => setConfirmOrderStartOpen(false)}
+                    title="Ready to start order migration?"
+                    primaryAction={{
+                      content: 'Start order migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmOrderStartOpen(false)
+                        startOrderMigration.mutate()
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmOrderStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">We’ll start creating orders in Shopify based on your Magento order history.</Text>
+                      <Box paddingBlockStart="200">
+                        <Text as="p" tone="subdued">
+                          Before you continue, we recommend running <Text as="span" fontWeight="semibold">Preview (dry run)</Text> and validating the mapped
+                          totals, addresses, and line items.
+                        </Text>
+                      </Box>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Card background="bg-surface-secondary">
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Status
+                      </Text>
+                      <Text as="p">Run: {orderRun ? `#${orderRun.id}` : '-'}</Text>
+                      <Text as="p">State: {orderRun ? orderRun.status : '-'}</Text>
+                      {orderDurationLabel ? (
+                        <Text as="p">
+                          {isOrderRunning ? 'Elapsed: ' : 'Total time: '}
+                          {orderDurationLabel}
+                        </Text>
+                      ) : null}
+                      <Text as="p">Processed: {orderRun ? orderRun.processed : 0}</Text>
+                      <Text as="p">Succeeded: {orderRun ? orderRun.succeeded : 0}</Text>
+                      <Text as="p">Failed: {orderRun ? orderRun.failed : 0}</Text>
+                      {orderRun ? <Text as="p">Skipped: {orderSkippedCount}</Text> : null}
+
+                      {recentOrderFailedItems.length > 0 ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="h4" variant="headingSm">
+                            Recent failures
+                          </Text>
+                          <List type="bullet">
+                            {recentOrderFailedItems.map((it) => (
+                              <List.Item key={it.id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  —
+                                  {(() => {
+                                    const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
+                                    const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
+                                    const userErrMsg = ctx?.userErrors?.[0]?.message || null
+                                    return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
+                                  })()}
+                                </Text>
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Box>
+                      ) : null}
+                    </BlockStack>
+                  </Card>
                 </BlockStack>
               </Card>
-            </BlockStack>
-          </Card>
-        </Layout.Section>
+            </Layout.Section>
 
-        {/* ── Discounts Migration ── */}
-        <Layout.Section>
-          <DiscountsMigrationCard
-            connected={connected}
-            workerOnline={workerOnline}
-            discountRun={discountRun}
-            isDiscountRunning={isDiscountRunning}
-            discountPreview={discountPreview}
-            previewDiscountMigration={previewDiscountMigration}
-            startDiscountMigration={startDiscountMigration}
-            cancelDiscountMigration={cancelDiscountMigration}
-            handleDownloadReport={handleDownloadReport}
-            handleDownloadPdfReport={handleDownloadPdfReport}
-            formatDurationSeconds={formatDurationSeconds}
-            durationSecondsFromRun={durationSecondsFromRun}
-            tick={tick}
-            recentDiscountFailedItems={Array.isArray(discountStatusQuery.data?.recent_failed_items) ? discountStatusQuery.data.recent_failed_items : []}
-            confirmDiscountStartOpen={confirmDiscountStartOpen}
-            setConfirmDiscountStartOpen={setConfirmDiscountStartOpen}
-          />
-        </Layout.Section>
+            <Layout.Section>
+              <Card>
+                <BlockStack gap="400">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      9) Migrate newsletter recipients
+                    </Text>
+                    <InlineStack gap="200">
+                      {newsletterRun?.report_available ? (
+                        <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(newsletterRun)}>
+                          Download CSV
+                        </Button>
+                      ) : null}
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" tone="subdued">
+                    Migrate newsletter subscribers and update their email marketing consent in Shopify.
+                  </Text>
 
-        {/* ── Markets Migration ── */}
-        <Layout.Section>
-          <MarketsMigrationCard
-            connected={connected}
-            workerOnline={workerOnline}
-            marketRun={marketRun}
-            isMarketRunning={isMarketRunning}
-            marketPreview={marketPreview}
-            previewMarketMigration={previewMarketMigration}
-            startMarketMigration={startMarketMigration}
-            cancelMarketMigration={cancelMarketMigration}
-            handleDownloadReport={handleDownloadReport}
-            handleDownloadPdfReport={handleDownloadPdfReport}
-            recentMarketFailedItems={recentMarketFailedItems}
-            marketSkippedCount={marketSkippedCount}
-            marketDurationLabel={marketDurationLabel}
-            confirmMarketStartOpen={confirmMarketStartOpen}
-            setConfirmMarketStartOpen={setConfirmMarketStartOpen}
-          />
-        </Layout.Section>
+                  {/* What gets migrated — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#f0f7ff' }}>
+                    <button
+                      type="button"
+                      onClick={() => setNewsletterMappingInfoOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#0070c0' }}>
+                        <span>ℹ</span> What gets migrated
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: newsletterMappingInfoOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {newsletterMappingInfoOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Email Subscribers</strong> — Active and inactive newsletter subscribers are migrated.</List.Item>
+                          <List.Item><strong>Marketing Consent</strong> — Subscriber opt-in status is mapped to Shopify customer email marketing consent.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Known limitations — collapsible */}
+                  <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#fff8f0' }}>
+                    <button
+                      type="button"
+                      onClick={() => setNewsletterLimitationsOpen((v) => !v)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#b98900' }}>
+                        <span>⚠</span> Known limitations
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#6d7175', transform: newsletterLimitationsOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+                    </button>
+                    {newsletterLimitationsOpen && (
+                      <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+                        <List type="bullet">
+                          <List.Item><strong>Campaign History</strong> — Past email campaigns, logs, statistics, and click history are not migrated.</List.Item>
+                          <List.Item><strong>Consent Double Opt-In</strong> — Any double opt-in settings and communications must be configured directly in Shopify Admin.</List.Item>
+                        </List>
+                      </div>
+                    )}
+                  </div>
+
+                  {connected && workerOnline && !newsletterPrerequisitesReady && !isNewsletterRunning ? (
+                    <Banner status="warning" title="Newsletter migration prerequisites required">
+                      {newsletterPrerequisiteMessages.length > 0 ? (
+                        <List type="bullet">
+                          {newsletterPrerequisiteMessages.map((message) => (
+                            <List.Item key={message}>{message}</List.Item>
+                          ))}
+                        </List>
+                      ) : (
+                        <p>Complete customer migration before migrating newsletter recipients.</p>
+                      )}
+                    </Banner>
+                  ) : null}
+
+                  <InlineStack gap="300" align="start" blockAlign="center">
+                    <Button
+                      loading={previewNewsletterMigration.isPending}
+                      disabled={!connected || !workerOnline || isNewsletterRunning}
+                      onClick={() => {
+                        setNewsletterPreview(null)
+                        setExpandedNewsletterPreviewId(null)
+                        previewNewsletterMigration.mutate({ limit: 10, page: 1, include_payload: true })
+                      }}
+                    >
+                      Preview (dry run)
+                    </Button>
+                    {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
+                    <Button
+                      variant="primary"
+                      disabled={!canStartNewsletter}
+                      loading={startNewsletterMigration.isPending || isNewsletterRunning}
+                      onClick={() => setConfirmNewsletterStartOpen(true)}
+                    >
+                      Start newsletter migration
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={!isNewsletterRunning}
+                      loading={cancelNewsletterMigration.isPending}
+                      onClick={() => cancelNewsletterMigration.mutate()}
+                    >
+                      Cancel
+                    </Button>
+                  </InlineStack>
+
+                  {newsletterPreview ? (
+                    <Card background="bg-surface-secondary">
+                      <BlockStack gap="200">
+                        <Text as="h3" variant="headingSm">
+                          Preview results
+                        </Text>
+                        <Text as="p">Page: {newsletterPreview.page ?? '-'}</Text>
+                        <Text as="p">Total (Magento): {newsletterPreview.total ?? '-'}</Text>
+
+                        {newsletterPreviewItems.length > 0 ? (
+                          <List type="bullet">
+                            {newsletterPreviewItems.map((it) => (
+                              <List.Item key={it.source_id || it.email}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.email || it.source_id || '-'}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  — {it.active ? 'Active' : 'Inactive'}
+                                </Text>
+
+                                {it.payload || it.magento_raw ? (
+                                  <Box paddingBlockStart="150">
+                                    <ButtonGroup>
+                                      <Button
+                                        size="micro"
+                                        onClick={() =>
+                                          setExpandedNewsletterPreviewId((prev) => (prev === (it.source_id || it.email) ? null : it.source_id || it.email))
+                                        }
+                                      >
+                                        {expandedNewsletterPreviewId === (it.source_id || it.email) ? 'Hide details' : 'Show details'}
+                                      </Button>
+                                    </ButtonGroup>
+                                    {expandedNewsletterPreviewId === (it.source_id || it.email) ? (
+                                      <Box paddingBlockStart="150">
+                                        {it.payload ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Shopify payload
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(it.payload, null, 2)}</pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
+
+                                        {it.magento_raw ? (
+                                          <Box paddingBlockStart="150">
+                                            <Text as="p" tone="subdued">
+                                              Magento raw
+                                            </Text>
+                                            <Box
+                                              padding="200"
+                                              background="bg-surface"
+                                              borderColor="border"
+                                              borderWidth="025"
+                                              borderRadius="200"
+                                              overflowX="scroll"
+                                            >
+                                              <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(it.magento_raw, null, 2)}</pre>
+                                            </Box>
+                                          </Box>
+                                        ) : null}
+                                      </Box>
+                                    ) : null}
+                                  </Box>
+                                ) : null}
+                              </List.Item>
+                            ))}
+                          </List>
+                        ) : (
+                          <Text as="p">No items returned for this page.</Text>
+                        )}
+                      </BlockStack>
+                    </Card>
+                  ) : null}
+
+                  <Modal
+                    open={confirmNewsletterStartOpen}
+                    onClose={() => setConfirmNewsletterStartOpen(false)}
+                    title="Ready to start newsletter migration?"
+                    primaryAction={{
+                      content: 'Start newsletter migration',
+                      destructive: true,
+                      onAction: () => {
+                        setConfirmNewsletterStartOpen(false)
+                        startNewsletterMigration.mutate()
+                      },
+                    }}
+                    secondaryActions={[
+                      {
+                        content: 'Cancel',
+                        onAction: () => setConfirmNewsletterStartOpen(false),
+                      },
+                    ]}
+                  >
+                    <Modal.Section>
+                      <Text as="p">
+                        We’ll sync Magento newsletter recipients into Shopify Customers and set Email subscription based on their active status.
+                      </Text>
+                    </Modal.Section>
+                  </Modal>
+
+                  <Card background="bg-surface-secondary">
+                    <BlockStack gap="200">
+                      <Text as="h3" variant="headingSm">
+                        Status
+                      </Text>
+                      <Text as="p">Run: {newsletterRun ? `#${newsletterRun.id}` : '-'}</Text>
+                      <Text as="p">State: {newsletterRun ? newsletterRun.status : '-'}</Text>
+                      {newsletterDurationLabel ? <Text as="p">Total time: {newsletterDurationLabel}</Text> : null}
+                      <Text as="p">Processed: {newsletterRun ? newsletterRun.processed : 0}</Text>
+                      <Text as="p">Succeeded: {newsletterRun ? newsletterRun.succeeded : 0}</Text>
+                      <Text as="p">Failed: {newsletterRun ? newsletterRun.failed : 0}</Text>
+                      {newsletterRun ? (
+                        <Text as="p">
+                          Skipped:{' '}
+                          {Math.max(
+                            0,
+                            Number(newsletterRun.processed || 0) - Number(newsletterRun.succeeded || 0) - Number(newsletterRun.failed || 0)
+                          )}
+                        </Text>
+                      ) : null}
+
+                      {recentNewsletterFailedItems.length > 0 ? (
+                        <Box paddingBlockStart="200">
+                          <Text as="h4" variant="headingSm">
+                            Recent failures
+                          </Text>
+                          <List type="bullet">
+                            {recentNewsletterFailedItems.map((it) => (
+                              <List.Item key={it.id}>
+                                <Text as="span" fontWeight="semibold">
+                                  {it.source_id}
+                                </Text>
+                                <Text as="span">
+                                  {' '}
+                                  —
+                                  {(() => {
+                                    const ctx = it?.error_context && typeof it.error_context === 'object' ? it.error_context : null
+                                    const shopifyErrMsg = ctx?.errors?.[0]?.message || ctx?.errors?.[0]?.error || null
+                                    const userErrMsg = ctx?.userErrors?.[0]?.message || null
+                                    return shopifyErrMsg || userErrMsg || it.error_message || 'Failed'
+                                  })()}
+                                </Text>
+                              </List.Item>
+                            ))}
+                          </List>
+                        </Box>
+                      ) : null}
+                    </BlockStack>
+                  </Card>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+
+            {/* ── Discounts Migration ── */}
+            <Layout.Section>
+              <DiscountsMigrationCard
+                connected={connected}
+                workerOnline={workerOnline}
+                discountRun={discountRun}
+                isDiscountRunning={isDiscountRunning}
+                discountPreview={discountPreview}
+                previewDiscountMigration={previewDiscountMigration}
+                startDiscountMigration={startDiscountMigration}
+                cancelDiscountMigration={cancelDiscountMigration}
+                handleDownloadReport={handleDownloadReport}
+                formatDurationSeconds={formatDurationSeconds}
+                durationSecondsFromRun={durationSecondsFromRun}
+                tick={tick}
+                recentDiscountFailedItems={Array.isArray(discountStatusQuery.data?.recent_failed_items) ? discountStatusQuery.data.recent_failed_items : []}
+                confirmDiscountStartOpen={confirmDiscountStartOpen}
+                setConfirmDiscountStartOpen={setConfirmDiscountStartOpen}
+              />
+            </Layout.Section>
+
+
 
           </>
         )}
@@ -3760,7 +3890,6 @@ function DiscountsMigrationCard({
   startDiscountMigration,
   cancelDiscountMigration,
   handleDownloadReport,
-  handleDownloadPdfReport,
   formatDurationSeconds,
   durationSecondsFromRun,
   tick,
@@ -3786,17 +3915,12 @@ function DiscountsMigrationCard({
       <BlockStack gap="400">
         <InlineStack align="space-between" blockAlign="center">
           <Text as="h2" variant="headingMd">
-            9) Discounts Migration
+            10) Migrate discounts
           </Text>
           <InlineStack gap="200">
             {discountRun?.report_available ? (
               <Button icon={ImportIcon} variant="tertiary" onClick={() => handleDownloadReport(discountRun)}>
                 Download CSV
-              </Button>
-            ) : null}
-            {discountRun?.pdf_available ? (
-              <Button variant="primary" onClick={() => handleDownloadPdfReport(discountRun)}>
-                Download PDF
               </Button>
             ) : null}
           </InlineStack>
@@ -3908,7 +4032,7 @@ function DiscountsMigrationCard({
                 Preview results
               </Text>
               <Text as="p">Page: {discountPreview.page ?? '-'}</Text>
-              <Text as="p">Total (Shopware): {discountPreview.total ?? '-'}</Text>
+              <Text as="p">Total (Magento): {discountPreview.total ?? '-'}</Text>
 
               {discountPreviewItems.length > 0 ? (
                 <List type="bullet">
@@ -3958,7 +4082,7 @@ function DiscountsMigrationCard({
         >
           <Modal.Section>
             <Text as="p">
-              We'll migrate Shopware promotions to Shopify discounts. Promotions without codes become automatic discounts; promotions with codes become code-based discounts. Unmappable types (fixed_unit_price, free_item) will be skipped.
+              We'll migrate Magento promotions to Shopify discounts. Promotions without codes become automatic discounts; promotions with codes become code-based discounts. Unmappable types (fixed_unit_price, free_item) will be skipped.
             </Text>
           </Modal.Section>
         </Modal>
@@ -4021,7 +4145,6 @@ function MarketsMigrationCard({
   startMarketMigration,
   cancelMarketMigration,
   handleDownloadReport,
-  handleDownloadPdfReport,
   recentMarketFailedItems,
   marketSkippedCount,
   marketDurationLabel,
@@ -4029,15 +4152,64 @@ function MarketsMigrationCard({
   setConfirmMarketStartOpen,
 }) {
   const [mappingInfoOpen, setMappingInfoOpen] = useState(false)
+  const [limitationsOpen, setLimitationsOpen] = useState(false)
+  // Track which channel IDs the user has selected (null = "all", array = specific subset)
+  const [selectedChannelIds, setSelectedChannelIds] = useState(null)
+
   const marketPreviewItems = Array.isArray(marketPreview?.items) ? marketPreview.items : []
   const canStartMarkets = connected && workerOnline && !isMarketRunning
+
+  // When preview loads, initialise all channels as selected
+  const prevPreviewRef = useCallback((items) => {
+    if (items && items.length > 0 && selectedChannelIds === null) {
+      setSelectedChannelIds(items.map((it) => it.source_id))
+    }
+  }, [selectedChannelIds])
+
+  // Sync selection state when preview first arrives
+  useEffect(() => {
+    if (marketPreviewItems.length > 0 && selectedChannelIds === null) {
+      setSelectedChannelIds(marketPreviewItems.map((it) => it.source_id))
+    }
+  }, [marketPreviewItems.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleChannel = useCallback((id) => {
+    setSelectedChannelIds((prev) => {
+      const current = prev ?? marketPreviewItems.map((it) => it.source_id)
+      if (current.includes(id)) {
+        return current.filter((x) => x !== id)
+      }
+      return [...current, id]
+    })
+  }, [marketPreviewItems])
+
+  const toggleAll = useCallback(() => {
+    const allIds = marketPreviewItems.map((it) => it.source_id)
+    setSelectedChannelIds((prev) => {
+      const current = prev ?? allIds
+      return current.length === allIds.length ? [] : allIds
+    })
+  }, [marketPreviewItems])
+
+  const selectedIds = selectedChannelIds ?? marketPreviewItems.map((it) => it.source_id)
+  const allSelected = marketPreviewItems.length > 0 && selectedIds.length === marketPreviewItems.length
+  const noneSelected = selectedIds.length === 0
+
+  // Build the payload for start — omit channel_ids if all are selected (migrate all)
+  const buildStartPayload = useCallback(() => {
+    const allIds = marketPreviewItems.map((it) => it.source_id)
+    if (selectedIds.length === allIds.length) {
+      return {}  // all selected → no filter needed
+    }
+    return { channel_ids: selectedIds }
+  }, [selectedIds, marketPreviewItems])
 
   return (
     <Card>
       <BlockStack gap="400">
         <InlineStack align="space-between" blockAlign="center">
           <Text as="h2" variant="headingMd">
-            10) Migrate Sales Channels (Markets & Domains)
+            4) Migrate sales channel
           </Text>
           <InlineStack gap="200">
             {marketRun?.report_available ? (
@@ -4045,16 +4217,11 @@ function MarketsMigrationCard({
                 Download CSV
               </Button>
             ) : null}
-            {marketRun?.pdf_available ? (
-              <Button variant="primary" onClick={() => handleDownloadPdfReport(marketRun)}>
-                Download PDF
-              </Button>
-            ) : null}
           </InlineStack>
         </InlineStack>
 
         <Text as="p" tone="subdued">
-          Replicate Shopware storefront Sales Channels as Shopify Markets. For each storefront, this will create a Shopify Market (force-reassigning country collisions) and set up a Web Presence (subfolder suffix or custom domain).
+          Replicate Magento storefront Store Views as Shopify Markets. For each storefront, this will create a Shopify Market (force-reassigning country collisions) and set up a Web Presence (subfolder suffix or custom domain).
         </Text>
 
         {/* What gets migrated — collapsible */}
@@ -4091,12 +4258,45 @@ function MarketsMigrationCard({
           )}
         </div>
 
+        {/* Known limitations — collapsible */}
+        <div style={{ border: '1px solid #c9cccf', borderRadius: '8px', overflow: 'hidden', background: '#fff8f0' }}>
+          <button
+            type="button"
+            onClick={() => setLimitationsOpen((v) => !v)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '12px 16px',
+              textAlign: 'left',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '14px', color: '#b98900' }}>
+              <span>⚠</span> Known limitations
+            </span>
+            <span style={{ fontSize: '12px', color: '#6d7175', transform: limitationsOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+          </button>
+          {limitationsOpen && (
+            <div style={{ padding: '0 16px 12px 16px', borderTop: '1px solid #c9cccf' }}>
+              <List type="bullet">
+                <List.Item><strong>Country Collisions</strong> — Shopify requires each country to be assigned to exactly one market. If a country is already active in another Shopify market, this migration will re-assign it to the new market.</List.Item>
+                <List.Item><strong>Domains &amp; Web Presence</strong> — Custom storefront domains must be pre-registered in your Shopify settings first; otherwise, they will fall back to subfolders.</List.Item>
+              </List>
+            </div>
+          )}
+        </div>
+
         <InlineStack gap="300" align="start" blockAlign="center">
           <Button
             loading={previewMarketMigration.isPending}
             disabled={!connected || !workerOnline || isMarketRunning}
             onClick={() => {
-              previewMarketMigration.mutate({ limit: 10, page: 1 })
+              setSelectedChannelIds(null)
+              previewMarketMigration.mutate({ limit: 100, page: 1 })
             }}
           >
             Preview (dry run)
@@ -4104,11 +4304,13 @@ function MarketsMigrationCard({
           {!workerOnline ? <Text as="span" tone="subdued">Queue worker offline</Text> : null}
           <Button
             variant="primary"
-            disabled={!canStartMarkets}
+            disabled={!canStartMarkets || noneSelected}
             loading={startMarketMigration.isPending || isMarketRunning}
             onClick={() => setConfirmMarketStartOpen(true)}
           >
-            Start market migration
+            {marketPreviewItems.length > 0 && !allSelected
+              ? `Start migration (${selectedIds.length} of ${marketPreviewItems.length})`
+              : 'Start market migration'}
           </Button>
           <Button
             variant="secondary"
@@ -4120,32 +4322,81 @@ function MarketsMigrationCard({
           </Button>
         </InlineStack>
 
-        {marketPreview ? (
-          <Card background="bg-surface-secondary">
+        {/* Channel selector — shown after preview and only while not running */}
+        {marketPreviewItems.length > 0 && !isMarketRunning && !startMarketMigration.isPending ? (
+          <Box>
             <BlockStack gap="200">
-              <Text as="h3" variant="headingSm">
-                Preview results
-              </Text>
-              <Text as="p">Total Storefronts (Shopware): {marketPreview.total ?? '-'}</Text>
+              <InlineStack gap="300" align="space-between" blockAlign="center">
+                <Text as="h3" variant="headingSm">
+                  Select Sales Channels to migrate
+                </Text>
+                <Button size="slim" variant="plain" onClick={toggleAll}>
+                  {allSelected ? 'Deselect all' : 'Select all'}
+                </Button>
+              </InlineStack>
 
-              {marketPreviewItems.length > 0 ? (
-                <List type="bullet">
-                  {marketPreviewItems.map((it) => (
-                    <List.Item key={it.source_id}>
-                      <Text as="span" fontWeight="semibold">
-                        {it.name || it.source_id || '-'}
+              <div style={{
+                border: '1px solid var(--p-color-border-subdued)',
+                borderRadius: '8px',
+                overflow: 'hidden',
+              }}>
+                {marketPreviewItems.map((it, idx) => {
+                  const checked = selectedIds.includes(it.source_id)
+                  return (
+                    <label
+                      key={it.source_id}
+                      htmlFor={`ch-${it.source_id}`}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'auto 1fr auto',
+                        gap: '12px',
+                        alignItems: 'center',
+                        padding: '12px 16px',
+                        cursor: 'pointer',
+                        background: checked
+                          ? 'rgba(26,127,90,0.06)'
+                          : idx % 2 === 0 ? 'var(--p-color-bg-surface)' : 'var(--p-color-bg-surface-secondary)',
+                        borderBottom: idx < marketPreviewItems.length - 1 ? '1px solid var(--p-color-border-subdued)' : 'none',
+                        transition: 'background 0.15s',
+                      }}
+                    >
+                      <input
+                        id={`ch-${it.source_id}`}
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleChannel(it.source_id)}
+                        style={{ accentColor: '#1a7f5a', width: '16px', height: '16px', cursor: 'pointer', flexShrink: 0 }}
+                      />
+                      <div>
+                        <Text as="p" variant="bodyMd" fontWeight={checked ? 'semibold' : 'regular'}>
+                          {it.name || it.source_id}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Country: {it.default_country} · Locale: {it.default_locale} · {it.domains} domain{it.domains !== 1 ? 's' : ''}
+                        </Text>
+                      </div>
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        <code style={{ fontSize: '12px', background: 'var(--p-color-bg-surface-secondary)', padding: '2px 6px', borderRadius: '4px' }}>
+                          {it.proposed_subfolder}
+                        </code>
                       </Text>
-                      <Text as="span">
-                        {' '}— Default Country: <strong>{it.default_country}</strong>, Default Locale: <strong>{it.default_locale}</strong>, Proposed Shopify URL suffix: <code>{it.proposed_subfolder}</code>
-                      </Text>
-                    </List.Item>
-                  ))}
-                </List>
-              ) : (
-                <Text as="p">No storefront channels returned.</Text>
+                    </label>
+                  )
+                })}
+              </div>
+
+              {noneSelected && (
+                <Banner tone="warning">
+                  <p>No channels selected. Select at least one channel to start migration.</p>
+                </Banner>
+              )}
+              {!allSelected && !noneSelected && (
+                <Text as="p" tone="subdued" variant="bodySm">
+                  {selectedIds.length} of {marketPreviewItems.length} channels selected for migration
+                </Text>
               )}
             </BlockStack>
-          </Card>
+          </Box>
         ) : null}
 
         {marketRun ? (
@@ -4205,7 +4456,7 @@ function MarketsMigrationCard({
           destructive: true,
           onAction: () => {
             setConfirmMarketStartOpen(false)
-            startMarketMigration.mutate()
+            startMarketMigration.mutate(buildStartPayload())
           },
         }}
         secondaryActions={[
@@ -4217,10 +4468,22 @@ function MarketsMigrationCard({
       >
         <Modal.Section>
           <Text as="p">
-            This will automatically create Shopify Markets and set up Web Presences (URLs) for each Shopware storefront Sales Channel.
+            {allSelected
+              ? 'This will migrate all Magento storefront Store Views as Shopify Markets.'
+              : `This will migrate ${selectedIds.length} of ${marketPreviewItems.length} selected Sales Channel${selectedIds.length !== 1 ? 's' : ''} as Shopify Markets.`}
           </Text>
+          {!allSelected && selectedIds.length > 0 ? (
+            <Box paddingBlockStart="200">
+              <Text as="p" variant="bodySm" tone="subdued">Selected: {
+                marketPreviewItems
+                  .filter((it) => selectedIds.includes(it.source_id))
+                  .map((it) => it.name || it.source_id)
+                  .join(', ')
+              }</Text>
+            </Box>
+          ) : null}
           <Box paddingBlockStart="200">
-            <Banner status="info" title="Important considerations">
+            <Banner tone="info" title="Important considerations">
               <List>
                 <List.Item>Country assignments will be forced (colliding assignments will be moved to the new markets).</List.Item>
                 <List.Item>Web presence URLs will fall back to subfolders if domain is not pre-registered in Shopify.</List.Item>

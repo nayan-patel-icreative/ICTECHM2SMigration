@@ -148,14 +148,18 @@ GQL;
     }
 
     /**
-     * Sync a single Shopware Sales Channel to a Shopify Market and Web Presence.
+     * Sync a single Magento Store View to a Shopify Market and Web Presence.
      * Handles force-reassigning of country code if it already belongs to another market.
      */
     public function syncMarket(Shop $shop, array $salesChannel): array
     {
         $name = trim($salesChannel['name']);
-        $defaultCountry = isset($salesChannel['default_country_iso']) ? strtoupper(trim($salesChannel['default_country_iso'])) : null;
-        $defaultLocale = $salesChannel['default_locale'] ?? 'en';
+        $defaultLocale = $salesChannel['locale'] ?? 'en-US';
+        $defaultCountry = null;
+        if (str_contains($defaultLocale, '-')) {
+            $parts = explode('-', $defaultLocale);
+            $defaultCountry = strtoupper(trim(end($parts)));
+        }
 
         Log::info('ShopifyMarketSyncService: Syncing sales channel to market', [
             'shop' => $shop->shop_domain,
@@ -287,7 +291,7 @@ GQL;
             ];
         }
 
-        // Extract subfolder suffix or custom domain from Shopware domains
+        // Extract subfolder or locale from Magento store views
         $webPresenceInput = $this->buildWebPresenceInput($salesChannel, $domains, $defaultLocale);
         $currentWebPresenceId = null;
         if (is_array($targetMarket) && isset($targetMarket['webPresences']) && is_array($targetMarket['webPresences'])) {
@@ -449,6 +453,23 @@ GQL;
     }
 
     /**
+     * Check whether a Shopify market GID still exists.
+     * Returns true if the market is found, false if deleted or inaccessible.
+     */
+    public function marketExists(Shop $shop, string $marketGid): bool
+    {
+        $query = <<<'GQL'
+query MarketExists($id: ID!) {
+  market(id: $id) {
+    id
+  }
+}
+GQL;
+        $res = $this->client->query($shop, $query, ['id' => $marketGid]);
+        return data_get($res, 'data.market.id') !== null;
+    }
+
+    /**
      * Update conditions/regions for a market.
      */
     private function updateMarketRegions(Shop $shop, string $marketId, array $regions): array
@@ -482,70 +503,37 @@ GQL;
     }
 
     /**
-     * Build input payload for webPresenceCreate.
+     * Build input payload for webPresenceCreate / webPresenceUpdate.
+     * Collects locale from Magento store view configuration
+     * and maps them to Shopify's defaultLocale + alternateLocales fields.
      */
     private function buildWebPresenceInput(array $salesChannel, array $shopifyDomains, string $defaultLocale): array
     {
+        $normalizedDefault = $this->normalizeLocale($defaultLocale);
+
         $input = [
-            'defaultLocale' => $this->normalizeLocale($defaultLocale),
+            'defaultLocale' => $normalizedDefault,
         ];
 
-        // Search for a domain match
-        $matchedDomainId = null;
-        $extractedSuffix = null;
-
-        $swDomains = $salesChannel['domains'] ?? [];
-        foreach ($swDomains as $swd) {
-            $parsed = parse_url($swd['url']);
-            $host = $parsed['host'] ?? null;
-            $path = trim($parsed['path'] ?? '', '/');
-
-            // If path contains public, get what is after public
-            if (str_contains($path, 'public/')) {
-                $parts = explode('public/', $path);
-                $path = trim(end($parts), '/');
-            }
-
-            if ($host) {
-                // Look for matching Shopify domain
-                foreach ($shopifyDomains as $sd) {
-                    if (strtolower($sd['host']) === strtolower($host)) {
-                        $matchedDomainId = $sd['id'];
-                        break;
-                    }
-                }
-            }
-
-            if ($path !== '') {
-                // Use last path segment as the subfolder suffix candidate
-                $segments = explode('/', $path);
-                $extractedSuffix = Str::slug(end($segments));
-            }
-        }
-
-        // Fallback suffix if no path exists in Shopware URL
-        if (!$extractedSuffix) {
+        // Use store view code as subfolder suffix candidate
+        $extractedSuffix = trim((string) ($salesChannel['code'] ?? ''));
+        if ($extractedSuffix === '') {
             $extractedSuffix = Str::slug($salesChannel['name']);
         }
 
-        // Clean suffix to be strictly alphanumeric
+        // Clean suffix to be strictly alphanumeric + hyphens
         $extractedSuffix = preg_replace('/[^a-z0-9-]/i', '', $extractedSuffix);
         if ($extractedSuffix === '') {
             $extractedSuffix = 'market-' . substr(md5($salesChannel['name']), 0, 5);
         }
 
-        if ($matchedDomainId) {
-            $input['domainId'] = $matchedDomainId;
-        } else {
-            // Use subfolder suffix strategy on primary domain
-            $input['subfolderSuffix'] = $extractedSuffix;
-        }
+        $input['subfolderSuffix'] = $extractedSuffix;
 
         return $input;
     }
 
     /**
-     * Map Shopware locale codes (e.g. de-DE, en-GB) to Shopify format.
+     * Map Magento locale codes (e.g. de-DE, en-GB) to Shopify format.
      */
     private function normalizeLocale(string $locale): string
     {

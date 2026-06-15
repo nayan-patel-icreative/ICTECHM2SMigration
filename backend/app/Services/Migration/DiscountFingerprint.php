@@ -5,24 +5,20 @@ namespace App\Services\Migration;
 class DiscountFingerprint
 {
     /**
-     * @param  array<string, mixed>  $promotion
+     * @param  array<string, mixed>  $rule
      */
-    public function make(array $promotion): string
+    public function make(array $rule): string
     {
         $payload = [
-            'name'                      => data_get($promotion, 'name'),
-            'active'                    => data_get($promotion, 'active'),
-            'validFrom'                 => data_get($promotion, 'validFrom'),
-            'validUntil'                => data_get($promotion, 'validUntil'),
-            'priority'                  => data_get($promotion, 'priority'),
-            'maxRedemptionsGlobal'      => data_get($promotion, 'maxRedemptionsGlobal'),
-            'maxRedemptionsPerCustomer' => data_get($promotion, 'maxRedemptionsPerCustomer'),
-            'preventCombination'        => data_get($promotion, 'preventCombination'),
-            'discounts'                 => data_get($promotion, 'discounts'),
-            // Support both SW6.7+ (individualCodes) and older (codes)
-            'codes'                     => data_get($promotion, 'individualCodes') ?? data_get($promotion, 'codes'),
-            'salesChannels'             => data_get($promotion, 'salesChannels'),
-            'cartRules'                 => data_get($promotion, 'cartRules'),
+            'name' => $rule['name'] ?? null,
+            'is_active' => $rule['is_active'] ?? null,
+            'from_date' => $rule['from_date'] ?? null,
+            'to_date' => $rule['to_date'] ?? null,
+            'simple_action' => $rule['simple_action'] ?? null,
+            'discount_amount' => $rule['discount_amount'] ?? null,
+            'coupon_code' => $rule['coupon_code'] ?? null,
+            'uses_per_customer' => $rule['uses_per_customer'] ?? null,
+            'uses_per_coupon' => $rule['uses_per_coupon'] ?? null,
         ];
 
         ksort($payload);

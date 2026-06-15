@@ -9,7 +9,7 @@ use App\Services\Migration\NewsletterMigrationService;
 use App\Services\Migration\NewsletterRecipientFingerprint;
 use App\Services\Migration\NewsletterRecipientPayloadMapper;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Http\Request;
 
 class NewsletterMigrationController extends Controller
@@ -25,10 +25,10 @@ class NewsletterMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -41,11 +41,11 @@ class NewsletterMigrationController extends Controller
         $page = (int) ($validated['page'] ?? 1);
         $includePayload = (bool) ($validated['include_payload'] ?? false);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(NewsletterRecipientPayloadMapper::class);
         $fingerprints = app(NewsletterRecipientFingerprint::class);
 
-        $res = $shopware->searchNewsletterRecipients($conn, 50, $page);
+        $res = $magento->searchNewsletterRecipients($conn, 50, $page);
         $rows = $res['recipients'] ?? [];
 
         if (!is_array($rows) || count($rows) === 0) {
@@ -78,7 +78,7 @@ class NewsletterMigrationController extends Controller
 
             if ($includePayload) {
                 $out['payload'] = $payload;
-                $out['shopware_raw'] = $r;
+                $out['magento_raw'] = $r;
             }
 
             $items[] = $out;
@@ -142,8 +142,7 @@ class NewsletterMigrationController extends Controller
                 'duration_seconds' => $durationSeconds,
                 'report_available' => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/' . $run->id . '/report',
-                'pdf_available' => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url' => '/api/migration/runs/' . $run->id . '/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
             'prerequisites' => $prerequisites,

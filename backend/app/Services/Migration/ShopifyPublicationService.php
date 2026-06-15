@@ -319,11 +319,11 @@ GQL;
     }
 
     /**
-     * Sync product visibility across market publications based on Shopware visibilities.
+     * Sync product visibility across market publications based on Magento visibility settings.
      */
     public function syncProductToMarkets(Shop $shop, string $productGid, array $visibilities): array
     {
-        // 1. Gather all active Shopware Sales Channel IDs
+        // 1. Gather all active Magento Store View codes
         $activeChannelIds = [];
         foreach ($visibilities as $v) {
             if (is_array($v) && !empty($v['salesChannelId'])) {

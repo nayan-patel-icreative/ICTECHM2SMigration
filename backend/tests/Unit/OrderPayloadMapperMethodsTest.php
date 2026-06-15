@@ -3,9 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Shop;
-use App\Models\ShopwareConnection;
 use App\Services\Migration\OrderPayloadMapper;
-use App\Services\Migration\StateAssignmentMapper;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -20,346 +18,171 @@ class OrderPayloadMapperMethodsTest extends TestCase
         return $callable->invoke($object, ...$args);
     }
 
-    public function test_effective_shipping_method_falls_back_to_standard(): void
+    public function test_finalize_mailing_address_for_shopify(): void
     {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->setRelation('shopwareConnection', null);
-
         $mapper = new OrderPayloadMapper();
-        $order = [
-            'state' => ['technicalName' => 'open'],
-            'deliveries' => [],
+        $addr = [
+            'firstname' => 'John',
+            'lastname' => 'Doe',
+            'company' => 'Google',
+            'street' => ['1600 Amphitheatre Pkwy', 'Suite 100'],
+            'city' => 'Mountain View',
+            'postcode' => '94043',
+            'country_id' => 'US',
+            'telephone' => '+16502530000',
         ];
 
-        $this->assertSame(
-            'Standard',
-            $this->invokePrivate($mapper, 'effectiveShippingMethodName', $shop, $order)
-        );
+        $res = $this->invokePrivate($mapper, 'finalizeMailingAddressForShopify', $addr);
+
+        $this->assertSame('John', $res['firstName']);
+        $this->assertSame('Doe', $res['lastName']);
+        $this->assertSame('Google', $res['company']);
+        $this->assertSame('1600 Amphitheatre Pkwy', $res['address1']);
+        $this->assertSame('Suite 100', $res['address2']);
+        $this->assertSame('Mountain View', $res['city']);
+        $this->assertSame('94043', $res['zip']);
+        $this->assertSame('US', $res['countryCode']);
+        $this->assertSame('+16502530000', $res['phone']);
     }
 
-    public function test_payment_method_name_reads_embedded_transaction_label(): void
+    public function test_resolve_billing_address(): void
     {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->setRelation('shopwareConnection', null);
-
         $mapper = new OrderPayloadMapper();
         $order = [
-            'transactions' => [
-                [
-                    'paymentMethod' => [
-                        'translated' => ['name' => 'Cash on delivery'],
+            'billing_address' => [
+                'firstname' => 'John',
+                'lastname' => 'Doe',
+            ],
+        ];
+
+        $res = $this->invokePrivate($mapper, 'resolveBillingAddress', $order);
+        $this->assertSame('John', $res['firstname']);
+    }
+
+    public function test_resolve_shipping_address_from_shipping_assignments(): void
+    {
+        $mapper = new OrderPayloadMapper();
+        $order = [
+            'extension_attributes' => [
+                'shipping_assignments' => [
+                    [
+                        'shipping' => [
+                            'address' => [
+                                'firstname' => 'Jane',
+                                'lastname' => 'Doe',
+                            ],
+                        ],
                     ],
                 ],
             ],
         ];
 
-        $this->assertSame(
-            'Cash on delivery',
-            $this->invokePrivate($mapper, 'paymentMethodName', $shop, $order)
-        );
+        $res = $this->invokePrivate($mapper, 'resolveShippingAddress', $order);
+        $this->assertSame('Jane', $res['firstname']);
     }
 
-    public function test_map_address_includes_address2_from_additional_lines(): void
-    {
-        $mapper = new OrderPayloadMapper();
-        $addr = $this->invokePrivate($mapper, 'mapAddress', [
-            'firstName' => 'Jane',
-            'lastName' => 'Doe',
-            'street' => 'Main St 1',
-            'additionalAddressLine1' => 'Apt 4',
-            'additionalAddressLine2' => 'Building B',
-            'zipcode' => '10115',
-            'city' => 'Berlin',
-            'country' => ['iso' => 'DE'],
-        ]);
-
-        $this->assertSame('Apt 4, Building B', $addr['address2']);
-    }
-
-    public function test_line_item_title_appends_variant_options(): void
-    {
-        $mapper = new OrderPayloadMapper();
-        $title = $this->invokePrivate($mapper, 'lineItemTitleWithOptions', [
-            'label' => 'T-Shirt',
-            'payload' => [
-                'options' => [
-                    ['group' => 'Size', 'option' => 'L'],
-                    ['group' => 'Color', 'option' => 'Blue'],
-                ],
-            ],
-        ]);
-
-        $this->assertSame('T-Shirt (Size: L, Color: Blue)', $title);
-    }
-
-    public function test_resolve_order_discount_amount_sums_line_discounts(): void
-    {
-        $mapper = new OrderPayloadMapper();
-        $amount = $this->invokePrivate($mapper, 'resolveOrderDiscountAmount', [
-            'price' => ['discountPrice' => 0],
-            'lineItems' => [
-                ['price' => ['discountPrice' => 5.5]],
-                ['price' => ['discountPrice' => 2.5]],
-            ],
-        ]);
-
-        $this->assertEqualsWithDelta(8.0, $amount, 0.001);
-    }
-
-    public function test_finalize_mailing_address_fills_missing_country_from_billing(): void
-    {
-        $mapper = new OrderPayloadMapper();
-        $billing = [
-            'firstName' => 'Test',
-            'lastName' => 'Doe',
-            'address1' => '4587 Test',
-            'city' => 'Test',
-            'zip' => '4587',
-            'countryCode' => 'GB',
-            'country' => 'United Kingdom',
-        ];
-        $shipping = [
-            'firstName' => 'Test',
-            'lastName' => 'Doe',
-            'address1' => '4587 Test',
-            'city' => 'Test',
-            'zip' => '4587',
-        ];
-
-        $final = $this->invokePrivate($mapper, 'finalizeMailingAddressForShopify', $shipping, $billing);
-
-        $this->assertIsArray($final);
-        $this->assertSame('GB', $final['countryCode'] ?? null);
-        $this->assertSame('United Kingdom', $final['country'] ?? null);
-    }
-
-    public function test_resolve_shipping_address_falls_back_to_billing(): void
+    public function test_resolve_shipping_address_from_shipping_address_field(): void
     {
         $mapper = new OrderPayloadMapper();
         $order = [
-            'billingAddress' => [
-                'firstName' => 'Test',
-                'lastName' => 'Doe',
-                'street' => '4587 Test',
-                'zipcode' => '4587',
-                'city' => 'Test',
-                'country' => ['iso' => 'GB'],
+            'shipping_address' => [
+                'firstname' => 'Bob',
+                'lastname' => 'Smith',
             ],
-            'deliveries' => [],
         ];
 
-        $shipping = $this->invokePrivate($mapper, 'resolveShippingAddress', $order);
-
-        $this->assertIsArray($shipping);
-        $this->assertSame('4587 Test', $shipping['address1'] ?? null);
+        $res = $this->invokePrivate($mapper, 'resolveShippingAddress', $order);
+        $this->assertSame('Bob', $res['firstname']);
     }
 
-    public function test_resolve_shipping_address_from_delivery_address_id(): void
+    public function test_map_line_items_skips_children(): void
     {
         $mapper = new OrderPayloadMapper();
         $order = [
-            'deliveries' => [
-                ['shippingOrderAddressId' => 'ship-addr-1'],
-            ],
-            'addresses' => [
+            'items' => [
                 [
-                    'id' => 'ship-addr-1',
-                    'firstName' => 'Ship',
-                    'lastName' => 'To',
-                    'street' => 'Ship Street',
-                    'zipcode' => '9999',
-                    'city' => 'Ship City',
-                    'country' => ['iso' => 'GB'],
+                    'name' => 'Parent Configurable',
+                    'qty_ordered' => 2,
+                    'price' => 49.99,
+                    'sku' => 'CONFIG-01',
                 ],
-            ],
-        ];
-
-        $shipping = $this->invokePrivate($mapper, 'resolveShippingAddress', $order);
-
-        $this->assertIsArray($shipping);
-        $this->assertSame('Ship Street', $shipping['address1'] ?? null);
-    }
-
-    public function test_resolve_billing_address_from_order_customer_default(): void
-    {
-        $mapper = new OrderPayloadMapper();
-        $order = [
-            'billingAddress' => null,
-            'orderCustomer' => [
-                'customer' => [
-                    'defaultBillingAddress' => [
-                        'firstName' => 'Test',
-                        'lastName' => 'Doe',
-                        'street' => '4587 Test',
-                        'zipcode' => '4587',
-                        'city' => 'Test',
-                        'country' => ['name' => 'United Kingdom'],
-                    ],
-                ],
-            ],
-        ];
-
-        $billing = $this->invokePrivate($mapper, 'resolveBillingAddress', $order);
-
-        $this->assertIsArray($billing);
-        $this->assertSame('4587 Test', $billing['address1'] ?? null);
-        $this->assertSame('GB', $billing['countryCode'] ?? null);
-    }
-
-    public function test_map_assignment_custom_attributes_shows_shopware_payment_when_unmapped(): void
-    {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->shop_domain = 'test.myshopify.com';
-        $shop->setRelation('shopwareConnection', new ShopwareConnection());
-
-        $mapper = new OrderPayloadMapper();
-        $assignments = new StateAssignmentMapper();
-        $reflection = new ReflectionClass(StateAssignmentMapper::class);
-        $cache = $reflection->getProperty('cache');
-        $cache->setAccessible(true);
-        $cache->setValue($assignments, [1 => []]);
-
-        $order = [
-            'state' => ['technicalName' => 'open'],
-            'transactions' => [
-                ['state' => ['technicalName' => 'open'], 'paymentMethod' => ['name' => 'Cash on delivery']],
-            ],
-            'deliveries' => [],
-        ];
-
-        $attrs = $this->invokePrivate($mapper, 'mapAssignmentCustomAttributes', $shop, $order, $assignments);
-        $byKey = [];
-        foreach ($attrs as $attr) {
-            $byKey[$attr['key']] = $attr['value'];
-        }
-
-        $this->assertSame('Cash on delivery', $byKey['Shopware payment method'] ?? null);
-        $this->assertSame('Cash on delivery', $byKey['Shopify payment method'] ?? null);
-    }
-
-    public function test_map_assignment_custom_attributes_includes_method_pairs(): void
-    {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->shop_domain = 'test.myshopify.com';
-        $shop->setRelation('shopwareConnection', new ShopwareConnection());
-
-        $mapper = new OrderPayloadMapper();
-        $assignments = \App\Services\Migration\StateAssignmentMapper::class;
-
-        $reflection = new ReflectionClass($assignments);
-        $mapperInstance = new $assignments();
-        $cache = $reflection->getProperty('cache');
-        $cache->setAccessible(true);
-        $cache->setValue($mapperInstance, [
-            1 => [
-                'order_state' => ['open' => 'paid'],
-                'transaction_state' => ['open' => 'paid'],
-                'delivery_state' => ['open' => 'fulfilled'],
-                'payment_methods' => ['Cash on delivery' => 'bank_transfer'],
-                'shipping_methods' => ['Standard' => 'overnight'],
-            ],
-        ]);
-
-        $order = [
-            'state' => ['technicalName' => 'open'],
-            'transactions' => [
-                ['state' => ['technicalName' => 'open'], 'paymentMethod' => ['name' => 'Cash on delivery']],
-            ],
-            'deliveries' => [],
-        ];
-
-        $attrs = $this->invokePrivate($mapper, 'mapAssignmentCustomAttributes', $shop, $order, $mapperInstance);
-        $byKey = [];
-        foreach ($attrs as $attr) {
-            $byKey[$attr['key']] = $attr['value'];
-        }
-
-        $this->assertSame('Cash on delivery', $byKey['Shopware payment method'] ?? null);
-        $this->assertSame('Bank Transfer', $byKey['Shopify payment method'] ?? null);
-        $this->assertSame('Standard', $byKey['Shopware shipping method'] ?? null);
-        $this->assertSame('Overnight Shipping', $byKey['Shopify shipping method'] ?? null);
-    }
-
-    public function test_build_manual_payment_capture_uses_display_name_and_amount(): void
-    {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->setRelation('shopwareConnection', null);
-
-        $reflection = new ReflectionClass(StateAssignmentMapper::class);
-        $assignments = new StateAssignmentMapper();
-        $cache = $reflection->getProperty('cache');
-        $cache->setAccessible(true);
-        $cache->setValue($assignments, [
-            1 => [
-                'payment_methods' => ['Cash on delivery' => 'bank_transfer'],
-            ],
-        ]);
-
-        $mapper = new OrderPayloadMapper();
-        $order = [
-            'amountTotal' => 19.99,
-            'orderDateTime' => '2026-04-10T08:14:38.234+00:00',
-            'transactions' => [
-                ['paymentMethod' => ['name' => 'Cash on delivery']],
-            ],
-        ];
-
-        $capture = $this->invokePrivate($mapper, 'buildManualPaymentCapture', $shop, $order, 'GBP', $assignments);
-
-        $this->assertIsArray($capture);
-        $this->assertSame('19.99', $capture['amount'] ?? null);
-        $this->assertSame('GBP', $capture['currencyCode'] ?? null);
-        $this->assertSame('Bank Transfer', $capture['paymentMethodName'] ?? null);
-        $this->assertSame('2026-04-10T08:14:38.234+00:00', $capture['processedAt'] ?? null);
-    }
-
-    public function test_build_sale_transaction_includes_gateway_processed_at_and_auth_code(): void
-    {
-        $shop = new Shop();
-        $shop->id = 1;
-        $shop->setRelation('shopwareConnection', null);
-
-        $reflection = new ReflectionClass(StateAssignmentMapper::class);
-        $assignments = new StateAssignmentMapper();
-        $cache = $reflection->getProperty('cache');
-        $cache->setAccessible(true);
-        $cache->setValue($assignments, [
-            1 => [
-                'payment_methods' => ['Cash on delivery' => 'bank_transfer'],
-            ],
-        ]);
-
-        $mapper = new OrderPayloadMapper();
-        $order = [
-            'orderDateTime' => '2026-04-10T09:00:00+00:00',
-            'transactions' => [
                 [
-                    'id' => 'sw-tx-999',
-                    'paymentMethod' => ['name' => 'Cash on delivery'],
+                    'name' => 'Child Simple',
+                    'qty_ordered' => 2,
+                    'price' => 49.99,
+                    'sku' => 'SIMPLE-01',
+                    'parent_item_id' => 123,
                 ],
             ],
         ];
 
-        $tx = $this->invokePrivate(
-            $mapper,
-            'buildSaleTransaction',
-            $shop,
-            $order,
-            'GBP',
-            $assignments,
-            20.0,
-            'PENDING',
-            'Cash on delivery'
-        );
+        $res = $this->invokePrivate($mapper, 'mapLineItems', $order, 'USD');
 
-        $this->assertSame('PENDING', $tx['status'] ?? null);
-        $this->assertSame('Bank Transfer', $tx['gateway'] ?? null);
-        $this->assertSame('2026-04-10T09:00:00+00:00', $tx['processedAt'] ?? null);
-        $this->assertSame('sw-tx-999', $tx['authorizationCode'] ?? null);
+        $this->assertCount(1, $res);
+        $this->assertSame('Parent Configurable', $res[0]['title']);
+        $this->assertSame(2, $res[0]['quantity']);
+        $this->assertSame('CONFIG-01', $res[0]['sku']);
+    }
+
+    public function test_map_shipping_lines(): void
+    {
+        $mapper = new OrderPayloadMapper();
+        $order = [
+            'shipping_description' => 'Flat Rate - Fixed',
+            'shipping_amount' => 5.00,
+        ];
+
+        $res = $this->invokePrivate($mapper, 'mapShippingLines', $order, 'USD');
+
+        $this->assertCount(1, $res);
+        $this->assertSame('Flat Rate - Fixed', $res[0]['title']);
+        $this->assertSame('5.00', $res[0]['originalShopityShippingRate']['priceSet']['shopMoney']['amount']);
+    }
+
+    public function test_map_order(): void
+    {
+        $shop = new Shop();
+        $shop->id = 1;
+
+        $mapper = new OrderPayloadMapper();
+        $order = [
+            'entity_id' => 99,
+            'increment_id' => '100000099',
+            'customer_email' => 'customer@example.com',
+            'order_currency_code' => 'EUR',
+            'grand_total' => 104.99,
+            'status' => 'processing',
+            'payment' => [
+                'method' => 'checkmo',
+            ],
+            'billing_address' => [
+                'firstname' => 'John',
+                'lastname' => 'Doe',
+                'street' => ['Main Street 123'],
+                'city' => 'Berlin',
+                'postcode' => '10115',
+                'country_id' => 'DE',
+            ],
+            'items' => [
+                [
+                    'name' => 'Product 1',
+                    'qty_ordered' => 1,
+                    'price' => 99.99,
+                    'sku' => 'PROD-1',
+                ],
+            ],
+            'shipping_description' => 'Flat Rate',
+            'shipping_amount' => 5.00,
+        ];
+
+        $mapped = $mapper->mapOrder($shop, $order);
+
+        $this->assertIsArray($mapped);
+        $this->assertSame('PENDING', $mapped['order']['financialStatus']);
+        $this->assertSame('104.99', $mapped['payment_capture']['amount']);
+        $this->assertSame('checkmo', $mapped['payment_capture']['paymentMethodName']);
+        $this->assertSame('customer@example.com', $mapped['order']['email']);
+        $this->assertSame('EUR', $mapped['order']['currency']);
+        $this->assertSame('100000099', $mapped['order']['name']);
     }
 }

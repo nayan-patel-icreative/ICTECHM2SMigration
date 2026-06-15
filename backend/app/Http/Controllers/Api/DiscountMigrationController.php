@@ -8,7 +8,7 @@ use App\Services\Migration\DiscountFingerprint;
 use App\Services\Migration\DiscountMapper;
 use App\Services\Migration\DiscountMigrationService;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Http\Request;
 
 class DiscountMigrationController extends Controller
@@ -24,10 +24,10 @@ class DiscountMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (! $shop || ! $conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -38,12 +38,12 @@ class DiscountMigrationController extends Controller
         $limit = (int) ($validated['limit'] ?? 10);
         $page  = (int) ($validated['page'] ?? 1);
 
-        $shopware     = app(ShopwareClient::class);
+        $magento      = app(MagentoClient::class);
         $mapper       = app(DiscountMapper::class);
         $fingerprints = app(DiscountFingerprint::class);
 
-        $res        = $shopware->fetchPromotions($conn, 50, $page);
-        $promotions = $res['promotions'] ?? [];
+        $res        = $magento->searchSalesRules($conn, 50, $page);
+        $promotions = $res['rules'] ?? [];
         $total      = (int) ($res['total'] ?? 0);
 
         $items = [];
@@ -52,7 +52,7 @@ class DiscountMigrationController extends Controller
                 continue;
             }
 
-            $sourceId = trim((string) data_get($promotion, 'id', ''));
+            $sourceId = trim((string) data_get($promotion, 'rule_id', ''));
             if ($sourceId === '') {
                 continue;
             }
@@ -67,12 +67,10 @@ class DiscountMigrationController extends Controller
                 $isAutomatic  = str_starts_with($mut, 'discountAutomatic');
             }
 
-            $primaryDiscount = data_get($promotion, 'discounts.0');
-            $value           = is_array($primaryDiscount) ? (float) ($primaryDiscount['value'] ?? 0) : 0;
-            $valueType       = is_array($primaryDiscount) ? (string) ($primaryDiscount['type'] ?? '') : '';
+            $value     = (float) ($promotion['discount_amount'] ?? 0);
+            $valueType = (string) ($promotion['simple_action'] ?? '');
 
-            $codes     = data_get($promotion, 'individualCodes') ?? data_get($promotion, 'codes');
-            $codeCount = is_array($codes) ? count($codes) : 0;
+            $codeCount = (isset($promotion['coupon_code']) && trim((string) $promotion['coupon_code']) !== '') ? 1 : 0;
 
             $items[] = [
                 'source_id'            => $sourceId,
@@ -82,9 +80,9 @@ class DiscountMigrationController extends Controller
                 'code_count'           => $codeCount,
                 'value'                => $value,
                 'value_type'           => $valueType,
-                'valid_from'           => data_get($promotion, 'validFrom'),
-                'valid_until'          => data_get($promotion, 'validUntil'),
-                'is_active'            => (bool) (data_get($promotion, 'active') ?? true),
+                'valid_from'           => data_get($promotion, 'from_date'),
+                'valid_until'          => data_get($promotion, 'to_date'),
+                'is_active'            => (bool) (data_get($promotion, 'is_active') ?? true),
                 'issues'               => $mapped['issues'],
                 'fingerprint'          => $fingerprints->make($promotion),
             ];
@@ -143,8 +141,7 @@ class DiscountMigrationController extends Controller
                 'duration_seconds'    => $durationSeconds,
                 'report_available'    => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/'.$run->id.'/report',
-                'pdf_available'       => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url'    => '/api/migration/runs/'.$run->id.'/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
         ]);

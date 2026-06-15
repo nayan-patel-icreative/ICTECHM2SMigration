@@ -1,24 +1,19 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "b1906cbe0fb4f68e6314571755700f03"
-name = "ICTECHS2SMigrator"
-application_url = "https://coral-gabriel-aug-portable.trycloudflare.com"
+client_id = "d9aa4e299ccb21484413b932e76fc9e5"
+name = "ICTECHM2SMigrator"
+application_url = "https://interest-obviously-friendly-maintenance.trycloudflare.com"
 embedded = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_discounts,read_inventory,read_locales,read_locations,read_markets,read_online_store_navigation,read_products,read_publications,read_translations,write_customers,write_discounts,write_files,write_inventory,write_markets,write_online_store_navigation,write_orders,write_products,write_publications,write_translations"
+
+[auth]
+redirect_urls = [ "https://interest-obviously-friendly-maintenance.trycloudflare.com/auth/shopify/callback" ]
+
+[webhooks]
+api_version = "2026-07"
 
 [build]
 automatically_update_urls_on_dev = true
-
-[webhooks]
-api_version = "2026-04"
-
-[[webhooks.subscriptions]]
-uri = "/webhooks/compliance"
-compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
-
-[access_scopes]
-scopes = "read_products,write_products,read_inventory,write_inventory,read_locations,write_customers,write_orders,read_publications,write_publications,read_online_store_navigation,write_online_store_navigation,write_files,write_discounts,read_discounts,read_translations,write_translations,read_locales,read_markets,write_markets"
-
-[auth]
-redirect_urls = [
-  "https://coral-gabriel-aug-portable.trycloudflare.com/auth/shopify/callback"
-]

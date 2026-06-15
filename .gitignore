@@ -1,0 +1,23 @@
+# Runtime / process files
+.admin-dev.log
+.admin.pid
+.backend.pid
+.queue.pid
+.tunnel.log
+.dev-port
+update_tunnel.py
+cookies.txt
+
+# Scratch / one-off scripts
+backend/scratch_*.php
+
+# Laravel logs (keep structure, ignore content)
+backend/storage/logs/*.log
+
+# Node / build
+admin/node_modules/
+admin/dist/
+
+# OS
+.DS_Store
+Thumbs.db

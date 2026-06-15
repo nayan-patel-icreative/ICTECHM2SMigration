@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\MigrationRun;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -39,7 +39,7 @@ class RunDiscountMigrationJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run) {
             return;
         }
@@ -50,7 +50,7 @@ class RunDiscountMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (! $shop || ! $conn) {
                 $run->status      = 'failed';
@@ -70,24 +70,13 @@ class RunDiscountMigrationJob implements ShouldQueue
                 return;
             }
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
             $perPage  = 100;
 
-            // --- Sales Channel scoping (multi-store support) ---
-            // Promotions use a many-to-many relationship via salesChannels.
-            // We filter using 'equalsAny' on salesChannels.id.
             $scopedFilter   = $this->filter;
-            $salesChannelId = trim((string) ($conn->sales_channel_id ?? ''));
-            if ($salesChannelId !== '') {
-                $scopedFilter[] = [
-                    'type'  => 'equalsAny',
-                    'field' => 'salesChannels.id',
-                    'value' => [$salesChannelId],
-                ];
-            }
 
-            $res        = $shopware->fetchPromotions($conn, $perPage, $this->page, $scopedFilter);
-            $promotions = $res['promotions'] ?? [];
+            $res        = $magento->searchSalesRules($conn, $perPage, $this->page, $scopedFilter);
+            $promotions = $res['rules'] ?? [];
             $total      = (int) ($res['total'] ?? 0);
 
             if (! is_array($promotions) || count($promotions) === 0) {

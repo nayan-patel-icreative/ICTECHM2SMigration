@@ -7,7 +7,7 @@ use App\Models\MigrationRun;
 use App\Models\ShopifyIdMapping;
 use App\Services\Migration\MigrationRunReportWriter;
 use App\Services\Migration\ShopifyMarketSyncService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -37,13 +37,13 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run || in_array($run->status, ['cancelled', 'finished', 'failed'], true)) {
             return;
         }
 
         $shop = $run->shop;
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
         if (! $shop || ! $conn || $this->sourceId === '') {
             return;
         }
@@ -66,11 +66,11 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
         $item->save();
 
         try {
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
             $marketService = app(ShopifyMarketSyncService::class);
 
             // Fetch the details of the channels
-            $channels = $shopware->getSalesChannelsWithDetails($conn);
+            $channels = $magento->getStoreViews($conn);
             $channel = null;
             foreach ($channels as $c) {
                 if ($c['id'] === $this->sourceId) {
@@ -80,9 +80,46 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
             }
 
             if (! is_array($channel)) {
-                $this->markFailed($run, $item, 'Shopware Sales Channel not found');
+                $this->markFailed($run, $item, 'Magento Store View not found');
                 return;
             }
+
+
+
+            // ── Skip check: fingerprint match + market still exists in Shopify ────
+            // Build fingerprint from the channel's key fields.
+            $fp = md5(implode('|', [
+                $channel['name'] ?? '',
+                $channel['code'] ?? '',
+                $channel['locale'] ?? '',
+                $channel['currency'] ?? '',
+            ]));
+
+            $previousFp = $this->latestSucceededFingerprint($shop->id, $this->sourceId);
+            $existingGid = ShopifyIdMapping::query()
+                ->where('shop_id', $shop->id)
+                ->where('entity_type', 'market')
+                ->where('source_id', $this->sourceId)
+                ->value('shopify_gid');
+
+            if ($previousFp !== null && $previousFp === $fp && $existingGid) {
+                // Same data — skip only if the market still exists in Shopify
+                if ($marketService->marketExists($shop, $existingGid)) {
+                    $this->markSkipped($run, $item, $fp, $channel['name'], $existingGid, 'No changes detected (fingerprint matched)');
+                    return;
+                }
+                // Market was deleted from Shopify — clear stale mapping and re-migrate
+                ShopifyIdMapping::query()
+                    ->where('shop_id', $shop->id)
+                    ->where('entity_type', 'market')
+                    ->where('source_id', $this->sourceId)
+                    ->delete();
+                Log::info('ProcessMarketMigrationItemJob: Stale mapping cleared, will re-migrate', [
+                    'source_id' => $this->sourceId,
+                    'stale_gid' => $existingGid,
+                ]);
+            }
+            // ─────────────────────────────────────────────────────────────────────
 
             // Sync the market
             $res = $marketService->syncMarket($shop, $channel);
@@ -94,7 +131,7 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
 
             $shopifyGid = $res['market_id'];
 
-            // Store ID mapping
+            // Store ID mapping with fingerprint
             ShopifyIdMapping::query()->updateOrCreate([
                 'shop_id'     => $shop->id,
                 'entity_type' => 'market',
@@ -105,16 +142,22 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
 
             // Save warnings if any
             $warning = $res['warning'] ?? '';
+            $ctx = null;
+            if ($warning !== '') {
+                $ctx = ['warning' => $warning];
+            }
 
             $item->status = 'succeeded';
+            $item->fingerprint = $fp;
             $item->error_message = $warning !== '' ? $warning : null;
+            $item->error_context = $ctx;
             $item->finished_at = now();
             $item->save();
 
             try {
                 app(MigrationRunReportWriter::class)->appendRow($run, [
-                    'shopware_sales_channel_id' => $item->source_id,
-                    'sales_channel_name' => $channel['name'],
+                    'magento_store_view_id' => $item->source_id,
+                    'store_view_name' => $channel['name'],
                     'status' => 'succeeded',
                     'reason' => $warning !== '' ? 'Web presence warning: ' . $warning : '',
                     'shopify_market_gid' => $shopifyGid,
@@ -156,6 +199,48 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
         });
     }
 
+    private function markSkipped(
+        MigrationRun $run,
+        MigrationItem $item,
+        string $fp,
+        string $channelName,
+        string $shopifyGid,
+        string $reason
+    ): void {
+        $item->status = 'skipped';
+        $item->fingerprint = $fp;
+        $item->error_message = null;
+        $item->finished_at = now();
+        $item->save();
+        try {
+            app(MigrationRunReportWriter::class)->appendRow($run, [
+                'magento_store_view_id' => $item->source_id,
+                'store_view_name' => $channelName,
+                'status' => 'skipped',
+                'reason' => $reason,
+                'shopify_market_gid' => $shopifyGid,
+                'migrated_at_utc' => $item->finished_at ? $item->finished_at->toDateTimeString() : '',
+            ]);
+        } catch (\Throwable) {
+            // ignore
+        }
+        $this->incrementRunCounters($run->id, ['processed' => 1]);
+    }
+
+    private function latestSucceededFingerprint(int $shopId, string $sourceId): ?string
+    {
+        return MigrationItem::query()
+            ->join('migration_runs', 'migration_runs.id', '=', 'migration_items.migration_run_id')
+            ->where('migration_runs.shop_id', $shopId)
+            ->where('migration_runs.type', 'markets')
+            ->where('migration_items.entity_type', 'market')
+            ->where('migration_items.source_id', $sourceId)
+            ->where('migration_items.status', 'succeeded')
+            ->whereNotNull('migration_items.fingerprint')
+            ->orderByDesc('migration_items.id')
+            ->value('migration_items.fingerprint');
+    }
+
     private function markFailed(MigrationRun $run, MigrationItem $item, string $message): void
     {
         $item->status = 'failed';
@@ -165,8 +250,8 @@ class ProcessMarketMigrationItemJob implements ShouldQueue
         try {
             $writer = app(MigrationRunReportWriter::class);
             $writer->appendRow($run, [
-                'shopware_sales_channel_id' => $item->source_id,
-                'sales_channel_name' => '',
+                'magento_store_view_id' => $item->source_id,
+                'store_view_name' => '',
                 'status' => 'failed',
                 'reason' => $writer->humanizeFailureReason($item),
                 'shopify_market_gid' => '',

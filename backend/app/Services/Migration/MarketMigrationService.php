@@ -8,7 +8,7 @@ use App\Models\Shop;
 
 class MarketMigrationService
 {
-    public function start(Shop $shop): MigrationRun
+    public function start(Shop $shop, ?array $channelIds = null): MigrationRun
     {
         $existing = MigrationRun::query()
             ->where('shop_id', $shop->id)
@@ -28,7 +28,7 @@ class MarketMigrationService
         ]);
         app(MigrationRunReportWriter::class)->init($run);
 
-        RunMarketMigrationJob::dispatch($run->id);
+        RunMarketMigrationJob::dispatch($run->id, $channelIds);
 
         return $run;
     }

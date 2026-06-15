@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\MigrationRun;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -32,7 +32,7 @@ class RunManufacturerMigrationJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run) {
             return;
         }
@@ -43,7 +43,7 @@ class RunManufacturerMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (! $shop || ! $conn) {
                 $run->status = 'failed';
@@ -56,7 +56,7 @@ class RunManufacturerMigrationJob implements ShouldQueue
             $run->status = 'running';
             $run->save();
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
             $perPage = 100;
 
             $run->refresh();
@@ -64,7 +64,7 @@ class RunManufacturerMigrationJob implements ShouldQueue
                 return;
             }
 
-            $res = $shopware->searchManufacturers($conn, $perPage, $this->page);
+            $res = $magento->searchManufacturers($conn, $perPage, $this->page);
             $rows = $res['manufacturers'] ?? [];
 
             if (! is_array($rows) || count($rows) === 0) {

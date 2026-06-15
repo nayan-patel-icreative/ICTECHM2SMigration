@@ -6,7 +6,7 @@ use App\Models\Shop;
 use App\Models\ShopifyIdMapping;
 use App\Services\Shopify\ShopifyAdminGraphqlClient;
 use App\Services\Migration\ShopifyTranslationSyncService;
-use App\Services\Shopware\ShopwareClient;
+
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -25,18 +25,18 @@ class ShopifyCollectionSyncService
     }
 
     /**
-     * @param  array<string, mixed>  $category  Shopware category entity (from product.categories)
+     * @param  array<string, mixed>  $category  Magento category entity (from product.categories)
      * @param  array<int, array{id: string, locale: string, name: string}>  $enabledLanguages  (optional)
      * @return array{collectionGid?: string, userErrors?: array<int, mixed>, errors?: mixed}
      */
-    public function upsertCollectionForCategoryAndAddProduct(Shop $shop, string $shopwareCategoryId, array $category, string $productGid, array $enabledLanguages = []): array
+    public function upsertCollectionForCategoryAndAddProduct(Shop $shop, string $magentoCategoryId, array $category, string $productGid, array $enabledLanguages = []): array
     {
         $input = $this->buildCollectionInput($category);
-        $cacheKey = "{$shop->id}:{$shopwareCategoryId}";
+        $cacheKey = "{$shop->id}:{$magentoCategoryId}";
         $collectionGid = $this->runCache[$cacheKey] ?? null;
 
         if (! $collectionGid) {
-            $ensure = $this->ensureCollectionExists($shop, $shopwareCategoryId, $input, $productGid);
+            $ensure = $this->ensureCollectionExists($shop, $magentoCategoryId, $input, $productGid);
             if (! empty($ensure['errors']) || ! empty($ensure['userErrors'])) {
                 return $ensure;
             }
@@ -57,7 +57,7 @@ class ShopifyCollectionSyncService
             } catch (\Throwable $e) {
                 Log::warning('Collection translation sync failed (collection still migrated)', [
                     'shop'                => $shop->shop_domain,
-                    'shopware_cat_id'     => $shopwareCategoryId,
+                    'magento_cat_id'     => $magentoCategoryId,
                     'collection_gid'      => $collectionGid,
                     'error'               => $e->getMessage(),
                 ]);
@@ -85,8 +85,14 @@ class ShopifyCollectionSyncService
         $seoDescription = $this->normalizeText(data_get($category, 'translated.metaDescription'))
             ?: $this->normalizeText(data_get($category, 'metaDescription'));
 
+        // Derive a deterministic handle from the Magento url_key or the title.
+        // Setting an explicit handle prevents Shopify from auto-creating a duplicate
+        // collection (e.g. "men-2") when a "men" collection already exists.
+        $handle = $this->deriveCollectionHandle($category, $title);
+
         $input = [
             'title' => $title,
+            'handle' => $handle,
         ];
 
         if ($descriptionHtml !== '') {
@@ -110,6 +116,44 @@ class ShopifyCollectionSyncService
         }
 
         return $input;
+    }
+
+    /**
+     * Derive a URL-safe Shopify collection handle from the category SEO URL or title.
+     * This is deterministic so re-runs produce the same handle and hit the same collection.
+     */
+    private function deriveCollectionHandle(array $category, string $title): string
+    {
+        // Prefer the Magento url_key path as handle (most stable across runs)
+        $seoUrls = data_get($category, 'seoUrls', []);
+        if (is_array($seoUrls)) {
+            foreach ($seoUrls as $seo) {
+                $path = trim((string) data_get($seo, 'seoPathInfo', ''));
+                if ($path !== '') {
+                    // Strip trailing/leading slashes and take last segment
+                    $path = trim($path, '/');
+                    $segments = explode('/', $path);
+                    $last = end($segments);
+                    if (is_string($last) && $last !== '') {
+                        return $this->slugify($last);
+                    }
+                }
+            }
+        }
+
+        // Fall back to slugifying the title
+        return $this->slugify($title);
+    }
+
+    /**
+     * Convert a string to a Shopify-compatible URL handle (lowercase, hyphens, no special chars).
+     */
+    private function slugify(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        // Replace non-alphanumeric characters with hyphens
+        $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? $value;
+        return trim($value, '-');
     }
 
     /**
@@ -240,8 +284,56 @@ class ShopifyCollectionSyncService
             }
         }
 
+        // No existing mapping — check Shopify by handle before creating to prevent duplicates
+        if (isset($input['handle']) && $input['handle'] !== '') {
+            $existingByHandle = $this->findCollectionByHandle($shop, $input['handle']);
+            if ($existingByHandle !== null) {
+                ShopifyIdMapping::query()->updateOrCreate([
+                    'shop_id' => $shop->id,
+                    'entity_type' => 'collection',
+                    'source_id' => $categoryId,
+                ], ['shopify_gid' => $existingByHandle]);
+
+                Cache::put($cacheKey, $existingByHandle, now()->addDays(7));
+
+                // Update the collection metadata and add the product
+                $this->updateCollection($shop, $existingByHandle, $input);
+                $this->tryPublishCollection($shop, $existingByHandle);
+                $this->addProductToCollection($shop, $existingByHandle, $productGid);
+                return ['collectionGid' => $existingByHandle];
+            }
+        }
+
         $create = $this->createCollection($shop, $input);
         if (! empty($create['errors']) || ! empty($create['userErrors'])) {
+            // Check if the error is a handle collision — collection with that handle already exists
+            $userErrors = $create['userErrors'] ?? [];
+            $handleTaken = false;
+            foreach (is_array($userErrors) ? $userErrors : [] as $ue) {
+                $msg = strtolower((string) data_get($ue, 'message', ''));
+                if (str_contains($msg, 'handle') && (str_contains($msg, 'taken') || str_contains($msg, 'already') || str_contains($msg, 'exists'))) {
+                    $handleTaken = true;
+                    break;
+                }
+            }
+
+            if ($handleTaken && isset($input['handle']) && $input['handle'] !== '') {
+                // Look up by handle to recover the existing collection GID
+                $existing = $this->findCollectionByHandle($shop, $input['handle']);
+                if ($existing !== null) {
+                    ShopifyIdMapping::query()->updateOrCreate([
+                        'shop_id' => $shop->id,
+                        'entity_type' => 'collection',
+                        'source_id' => $categoryId,
+                    ], ['shopify_gid' => $existing]);
+
+                    Cache::put($cacheKey, $existing, now()->addDays(7));
+                    $this->tryPublishCollection($shop, $existing);
+                    $this->addProductToCollection($shop, $existing, $productGid);
+                    return ['collectionGid' => $existing];
+                }
+            }
+
             Log::warning('Collection create failed', [
                 'shop' => $shop->shop_domain,
                 'category_id' => $categoryId,
@@ -284,6 +376,38 @@ class ShopifyCollectionSyncService
         }
 
         return ['userErrors' => [['message' => 'collectionCreate did not return a collection id']]];
+    }
+
+    /**
+     * Look up a Shopify collection by its URL handle.
+     * Returns the collection GID if found, null otherwise.
+     * Cached for 6 hours to reduce API calls.
+     */
+    private function findCollectionByHandle(Shop $shop, string $handle): ?string
+    {
+        $cacheKey = 'shopify:collection_by_handle:'.$shop->id.':'.md5($handle);
+        $cached = Cache::get($cacheKey);
+        if ($cached !== null) {
+            return $cached === '' ? null : (string) $cached;
+        }
+
+        $query = <<<'GQL'
+query FindCollectionByHandle($handle: String!) {
+  collectionByHandle(handle: $handle) {
+    id
+  }
+}
+GQL;
+
+        $res = $this->client->query($shop, $query, ['handle' => $handle]);
+        if (isset($res['errors'])) {
+            return null;
+        }
+
+        $id = (string) data_get($res, 'data.collectionByHandle.id', '');
+        Cache::put($cacheKey, $id !== '' ? $id : '', now()->addHours(6));
+
+        return $id !== '' ? $id : null;
     }
 
     private function collectionExists(Shop $shop, string $collectionGid): bool

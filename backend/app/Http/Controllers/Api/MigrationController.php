@@ -10,7 +10,7 @@ use App\Services\Migration\ProductMigrationService;
 use App\Services\Migration\ProductPayloadMapper;
 use App\Services\Migration\ShopifyRedirectSyncService;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 
@@ -27,10 +27,10 @@ class MigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -45,11 +45,11 @@ class MigrationController extends Controller
         $locationGid = (string) $validated['location_gid'];
         $includePayload = (bool) ($validated['include_payload'] ?? false);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(ProductPayloadMapper::class);
         $fingerprints = app(ProductFingerprint::class);
 
-        $res = $shopware->searchProducts($conn, 50, $page);
+        $res = $magento->searchProducts($conn, 50, $page);
         $products = $res['products'] ?? [];
         if (!is_array($products) || count($products) === 0) {
             return response()->json([
@@ -60,18 +60,20 @@ class MigrationController extends Controller
         }
 
         $parents = array_values(array_filter($products, function ($p) {
-            return empty($p['parentId']);
+            return ($p['visibility'] ?? 4) !== 1;
         }));
 
         $items = [];
         foreach (array_slice($parents, 0, $limit) as $p) {
-            $sourceId = (string) ($p['id'] ?? '');
+            $sourceId = (string) ($p['sku'] ?? '');
             if ($sourceId === '') {
                 continue;
             }
 
-            $children = $shopware->fetchVariantChildren($conn, $sourceId);
-            $payload = $mapper->mapParentWithVariants($p, $children, $locationGid, $shop->id);
+            $details = $magento->fetchProductWithChildren($conn, $sourceId);
+            $parentProduct = $details['parent'] ?? $p;
+            $children = $details['children'] ?? [];
+            $payload = $mapper->mapParentWithVariants($parentProduct, $children, $locationGid, $shop->id);
             $fp = $fingerprints->make($payload);
 
             $childCount = is_array($children) ? count($children) : 0;
@@ -82,7 +84,7 @@ class MigrationController extends Controller
                 foreach (array_slice($children, 0, 10) as $c) {
                     $childSample[] = [
                         'id' => $c['id'] ?? null,
-                        'sku' => $c['productNumber'] ?? null,
+                        'sku' => $c['sku'] ?? null,
                     ];
                 }
             }
@@ -97,32 +99,31 @@ class MigrationController extends Controller
             $seoTitle = (string) data_get($payload, 'seo.title', '');
             $seoDescription = (string) data_get($payload, 'seo.description', '');
             $seoHandle = (string) data_get($payload, 'handle', '');
-            $metafields = $mapper->mapShopwareMetafields($p, $children, $shop);
+            $metafields = [];
             $hasSeoKeywords = false;
-            foreach ($metafields as $mf) {
-                if ((string) data_get($mf, 'key', '') === 'seo_keywords' && trim((string) data_get($mf, 'value', '')) !== '') {
-                    $hasSeoKeywords = true;
+
+            $mediaCount = 0;
+            $media = $p['media_gallery_entries'] ?? [];
+            if (is_array($media)) {
+                $mediaCount = count($media);
+            }
+            $hasCover = false;
+            foreach ($media as $m) {
+                if (in_array('image', $m['types'] ?? [])) {
+                    $hasCover = true;
                     break;
                 }
             }
 
-            $mediaCount = 0;
-            $media = data_get($p, 'media', []);
-            if (is_array($media)) {
-                $mediaCount = count($media);
-            }
-            $hasCover = !empty(data_get($p, 'cover.media.url'));
-
             $categorySummaries = [];
-            $categories = data_get($p, 'categories', []);
+            $categories = $p['extension_attributes']['category_links'] ?? [];
             if (is_array($categories)) {
                 foreach ($categories as $c) {
-                    $cid = (string) data_get($c, 'id', '');
-                    $cname = (string) (data_get($c, 'translated.name') ?: data_get($c, 'name') ?: '');
-                    if ($cid !== '' || $cname !== '') {
+                    $cid = (string) data_get($c, 'category_id', '');
+                    if ($cid !== '') {
                         $categorySummaries[] = [
-                            'id' => $cid !== '' ? $cid : null,
-                            'name' => $cname !== '' ? $cname : null,
+                            'id' => $cid,
+                            'name' => 'Category ID ' . $cid,
                         ];
                     }
                 }
@@ -150,7 +151,7 @@ class MigrationController extends Controller
                 $issues[] = 'No variants generated (unexpected).';
             }
             if ($variantCount !== $expectedVariantCount) {
-                $issues[] = 'Variant audit mismatch: mapped variant count does not match Shopware child count.';
+                $issues[] = 'Variant audit mismatch: mapped variant count does not match Magento child count.';
             }
 
             $json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -168,7 +169,7 @@ class MigrationController extends Controller
                 'has_cover' => $hasCover,
                 'categories' => $categorySummaries,
                 'variant_sample' => $variantSample,
-                'shopware_child_count' => $childCount,
+                'magento_child_count' => $childCount,
                 'expected_variant_count' => $expectedVariantCount,
                 'variant_count' => $variantCount,
                 'option_count' => $optionCount,
@@ -239,8 +240,7 @@ class MigrationController extends Controller
                 'duration_seconds' => $durationSeconds,
                 'report_available' => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/' . $run->id . '/report',
-                'pdf_available' => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url' => '/api/migration/runs/' . $run->id . '/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
         ]);
@@ -271,10 +271,10 @@ class MigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -282,36 +282,41 @@ class MigrationController extends Controller
             'page' => ['nullable', 'integer', 'min:1', 'max:1000'],
         ]);
 
-        $limit = (int) ($validated['limit'] ?? 20);
+        $limit = (int) ($validated['limit'] ?? 50);
         $page = (int) ($validated['page'] ?? 1);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(ProductPayloadMapper::class);
 
-        $res = $shopware->searchProducts($conn, 100, $page);
+        $res = $magento->searchProducts($conn, 100, $page);
         $products = $res['products'] ?? [];
         $parents = array_values(array_filter(is_array($products) ? $products : [], function ($p) {
-            return empty($p['parentId']);
+            return ($p['visibility'] ?? 4) !== 1;
         }));
 
         $items = [];
         foreach (array_slice($parents, 0, $limit) as $p) {
-            $sourceId = (string) data_get($p, 'id', '');
+            $sourceId = (string) data_get($p, 'sku', '');
             if ($sourceId === '') {
                 continue;
             }
 
-            $seo = $mapper->mapSeoFields($p);
-            $fromPath = $this->normalizeRedirectPath((string) ($seo['seo_path'] ?? ''));
-            $handle = trim((string) ($seo['handle'] ?? ''));
-            if ($fromPath === '' || $handle === '') {
+            $urlKey = $this->getProductCustomAttribute($p, 'url_key') ?: $this->getProductCustomAttribute($p, 'url_path');
+            if (!$urlKey) {
                 continue;
             }
 
+            $fromPath = $this->normalizeRedirectPath($urlKey);
+            $handle = $this->slugifyHandle($urlKey);
             $toPath = '/products/'.$handle;
+
+            if (strcasecmp($fromPath, $toPath) === 0) {
+                continue;
+            }
+
             $items[] = [
                 'source_id' => $sourceId,
-                'product_name' => (string) (data_get($p, 'translated.name') ?: data_get($p, 'name') ?: ''),
+                'product_name' => (string) ($p['name'] ?? ''),
                 'old_path' => $fromPath,
                 'new_path' => $toPath,
                 'handle' => $handle,
@@ -329,10 +334,10 @@ class MigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -340,17 +345,17 @@ class MigrationController extends Controller
             'page' => ['nullable', 'integer', 'min:1', 'max:1000'],
         ]);
 
-        $limit = (int) ($validated['limit'] ?? 20);
+        $limit = (int) ($validated['limit'] ?? 50);
         $page = (int) ($validated['page'] ?? 1);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
         $mapper = app(ProductPayloadMapper::class);
         $redirects = app(ShopifyRedirectSyncService::class);
 
-        $res = $shopware->searchProducts($conn, 100, $page);
+        $res = $magento->searchProducts($conn, 100, $page);
         $products = $res['products'] ?? [];
         $parents = array_values(array_filter(is_array($products) ? $products : [], function ($p) {
-            return empty($p['parentId']);
+            return ($p['visibility'] ?? 4) !== 1;
         }));
 
         $processed = 0;
@@ -359,20 +364,25 @@ class MigrationController extends Controller
         $errors = [];
 
         foreach (array_slice($parents, 0, $limit) as $p) {
-            $sourceId = (string) data_get($p, 'id', '');
+            $sourceId = (string) data_get($p, 'sku', '');
             if ($sourceId === '') {
                 continue;
             }
 
-            $seo = $mapper->mapSeoFields($p);
-            $fromPath = $this->normalizeRedirectPath((string) ($seo['seo_path'] ?? ''));
-            $handle = trim((string) ($seo['handle'] ?? ''));
-            if ($fromPath === '' || $handle === '') {
+            $urlKey = $this->getProductCustomAttribute($p, 'url_key') ?: $this->getProductCustomAttribute($p, 'url_path');
+            if (!$urlKey) {
+                continue;
+            }
+
+            $fromPath = $this->normalizeRedirectPath($urlKey);
+            $handle = $this->slugifyHandle($urlKey);
+            $toPath = '/products/'.$handle;
+
+            if (strcasecmp($fromPath, $toPath) === 0) {
                 continue;
             }
 
             $processed++;
-            $toPath = '/products/'.$handle;
             $result = $redirects->upsertRedirect($shop, $fromPath, $toPath);
             if (!empty($result['errors']) || !empty($result['userErrors'])) {
                 $failed++;
@@ -396,6 +406,199 @@ class MigrationController extends Controller
             'failed' => $failed,
             'errors' => $errors,
         ]);
+    }
+
+    public function previewCollectionRedirects(Request $request)
+    {
+        /** @var Shop $shop */
+        $shop = $request->attributes->get('shop');
+        $conn = $shop ? $shop->magentoConnection : null;
+
+        if (!$shop || !$conn) {
+            return response()->json(['error' => 'Missing Magento connection'], 422);
+        }
+
+        $validated = $request->validate([
+            'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
+            'page'  => ['nullable', 'integer', 'min:1', 'max:1000'],
+        ]);
+
+        $limit = (int) ($validated['limit'] ?? 50);
+        $page  = (int) ($validated['page'] ?? 1);
+
+        $magento = app(MagentoClient::class);
+        $res = $magento->searchCategories($conn, $limit, $page);
+        $categories = $res['categories'] ?? [];
+
+        $items = [];
+        foreach ($categories as $cat) {
+            $catId = (string) data_get($cat, 'id', '');
+            if ($catId === '') {
+                continue;
+            }
+
+            $title = (string) ($cat['name'] ?? '');
+            $handle = $this->deriveCollectionHandle($cat, $title);
+            if ($handle === '') {
+                continue;
+            }
+
+            $fromPath = $this->collectionOldPath($cat);
+            if ($fromPath === '') {
+                continue;
+            }
+
+            $toPath = '/collections/'.$handle;
+            if (strcasecmp($fromPath, $toPath) === 0) {
+                continue;
+            }
+
+            $items[] = [
+                'source_id'       => $catId,
+                'collection_name' => $title,
+                'old_path'        => $fromPath,
+                'new_path'        => $toPath,
+                'handle'          => $handle,
+            ];
+        }
+
+        return response()->json([
+            'page'  => $page,
+            'total' => (int) ($res['total'] ?? 0),
+            'items' => $items,
+        ]);
+    }
+
+    public function importCollectionRedirects(Request $request)
+    {
+        /** @var Shop $shop */
+        $shop = $request->attributes->get('shop');
+        $conn = $shop ? $shop->magentoConnection : null;
+
+        if (!$shop || !$conn) {
+            return response()->json(['error' => 'Missing Magento connection'], 422);
+        }
+
+        $validated = $request->validate([
+            'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
+            'page'  => ['nullable', 'integer', 'min:1', 'max:1000'],
+        ]);
+
+        $limit = (int) ($validated['limit'] ?? 50);
+        $page  = (int) ($validated['page'] ?? 1);
+
+        $magento  = app(MagentoClient::class);
+        $redirects = app(ShopifyRedirectSyncService::class);
+
+        $res = $magento->searchCategories($conn, $limit, $page);
+        $categories = $res['categories'] ?? [];
+
+        $processed = 0;
+        $succeeded = 0;
+        $failed    = 0;
+        $errors    = [];
+
+        foreach ($categories as $cat) {
+            $catId = (string) data_get($cat, 'id', '');
+            if ($catId === '') {
+                continue;
+            }
+
+            $title = (string) ($cat['name'] ?? '');
+            $handle = $this->deriveCollectionHandle($cat, $title);
+            if ($handle === '') {
+                continue;
+            }
+
+            $fromPath = $this->collectionOldPath($cat);
+            if ($fromPath === '') {
+                continue;
+            }
+
+            $toPath = '/collections/'.$handle;
+            if (strcasecmp($fromPath, $toPath) === 0) {
+                continue;
+            }
+
+            $processed++;
+
+            $result = $redirects->upsertRedirect($shop, $fromPath, $toPath);
+            if (!empty($result['errors']) || !empty($result['userErrors'])) {
+                $failed++;
+                $errors[] = [
+                    'source_id'  => $catId,
+                    'old_path'   => $fromPath,
+                    'new_path'   => $toPath,
+                    'errors'     => $result['errors'] ?? null,
+                    'userErrors' => $result['userErrors'] ?? null,
+                ];
+                continue;
+            }
+
+            $succeeded++;
+        }
+
+        return response()->json([
+            'page'      => $page,
+            'processed' => $processed,
+            'succeeded' => $succeeded,
+            'failed'    => $failed,
+            'errors'    => $errors,
+        ]);
+    }
+
+    private function getCategoryCustomAttribute(array $category, string $code): ?string
+    {
+        $attrs = $category['custom_attributes'] ?? [];
+        foreach ($attrs as $attr) {
+            if (($attr['attribute_code'] ?? '') === $code) {
+                return (string) $attr['value'];
+            }
+        }
+        return null;
+    }
+
+    private function getProductCustomAttribute(array $product, string $code): ?string
+    {
+        $attrs = $product['custom_attributes'] ?? [];
+        foreach ($attrs as $attr) {
+            if (($attr['attribute_code'] ?? '') === $code) {
+                return (string) $attr['value'];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Derive the Shopify collection handle from a Magento category.
+     * Uses the SEO URL path or falls back to slugifying the title.
+     */
+    private function deriveCollectionHandle(array $category, string $title): string
+    {
+        $urlKey = $this->getCategoryCustomAttribute($category, 'url_key');
+        if ($urlKey) {
+            return $this->slugifyHandle($urlKey);
+        }
+        return $this->slugifyHandle($title);
+    }
+
+    private function slugifyHandle(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? $value;
+        return trim($value, '-');
+    }
+
+    /**
+     * Get the Magento category's old SEO URL path for the redirect source.
+     */
+    private function collectionOldPath(array $category): string
+    {
+        $urlPath = $this->getCategoryCustomAttribute($category, 'url_path') ?: $this->getCategoryCustomAttribute($category, 'url_key');
+        if ($urlPath) {
+            return $this->normalizeRedirectPath($urlPath);
+        }
+        return '';
     }
 
     private function normalizeRedirectPath(string $path): string
@@ -426,10 +629,10 @@ class MigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (!$shop || !$conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
@@ -454,9 +657,9 @@ class MigrationController extends Controller
         $page       = (int) ($validated['page'] ?? 1);
         $locationGid = (string) $validated['location_gid'];
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
 
-        $res      = $shopware->searchProducts($conn, 50, $page, $filter);
+        $res      = $magento->searchProducts($conn, 50, $page, $filter);
         $products = $res['products'] ?? [];
         $total    = (int) ($res['total'] ?? 0);
 

@@ -12,7 +12,7 @@ use App\Services\Migration\OrderPayloadMapper;
 use App\Services\Migration\ShopifyOrderDocumentSyncService;
 use App\Services\Migration\ShopifyOrderSyncService;
 use App\Services\Migration\ShopifyTranslationSyncService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -39,7 +39,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
     private array $order;
 
     /**
-     * SAFE CHANGE: Process exactly one Shopware order payload.
+     * SAFE CHANGE: Process exactly one Magento order payload.
      * Idempotent via migration_items unique key and ShopifyIdMapping.
      * Mapping logic is unchanged: reused from previous RunOrderMigrationJob.
      *
@@ -53,7 +53,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (!$run) {
             return;
         }
@@ -101,8 +101,8 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
 
         try {
             $order = $this->order;
-            if ($shop->shopwareConnection) {
-                $order = app(ShopwareClient::class)->enrichOrderForMigration($shop->shopwareConnection, $order);
+            if ($shop->magentoConnection) {
+                // Magento orders are fully self-contained from API.
             }
 
             $locationGid = app(MigrationLocationResolver::class)->resolveForRun($run, $shop);
@@ -204,30 +204,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
                 $item->finished_at = now();
                 $item->save();
 
-                // --- Non-blocking: store order language preference ---
-                try {
-                    $conn = $shop->shopwareConnection;
-                    if ($conn) {
-                        $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                        if (count($enabledLanguages) > 0) {
-                            $orderLangId = trim((string) ($order['languageId'] ?? ''));
-                            if ($orderLangId !== '') {
-                                $matched = array_filter($enabledLanguages, fn ($l) => ($l['id'] ?? '') === $orderLangId);
-                                $matched = array_values($matched);
-                                if (count($matched) > 0) {
-                                    $translationSync = app(ShopifyTranslationSyncService::class);
-                                    $translationSync->storeLanguagePreferenceMetafield(
-                                        $shop, $existingOrderGid,
-                                        (string) $matched[0]['locale'],
-                                        (string) ($matched[0]['name'] ?? '')
-                                    );
-                                }
-                            }
-                        }
-                    }
-                } catch (\Throwable) {
-                    // Non-fatal — order migration already succeeded
-                }
+                // Language preference is not tracked per order in Magento.
 
                 $run->refresh();
                 $run->processed++;
@@ -494,7 +471,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
             $item->fingerprint = $fp;
             $item->save();
 
-            // Upload Shopware order documents (invoices, delivery notes, etc.) to Shopify Files
+            // Upload Magento order invoice PDFs, etc.) to Shopify Files
             // and update custom attributes + metafields with the Shopify CDN URLs. Non-fatal.
             $this->syncOrderDocuments($shop, $sync, $mapper, $order, $orderGid, $run->id, $sourceId);
 
@@ -508,30 +485,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
             $item->finished_at = now();
             $item->save();
 
-            // --- Non-blocking: store order language preference ---
-            try {
-                $conn = $shop->shopwareConnection;
-                if ($conn) {
-                    $enabledLanguages = ShopwareClient::enabledLanguages($conn);
-                    if (count($enabledLanguages) > 0) {
-                        $orderLangId = trim((string) ($order['languageId'] ?? ''));
-                        if ($orderLangId !== '') {
-                            $matched = array_filter($enabledLanguages, fn ($l) => ($l['id'] ?? '') === $orderLangId);
-                            $matched = array_values($matched);
-                            if (count($matched) > 0) {
-                                $translationSync = app(ShopifyTranslationSyncService::class);
-                                $translationSync->storeLanguagePreferenceMetafield(
-                                    $shop, $orderGid,
-                                    (string) $matched[0]['locale'],
-                                    (string) ($matched[0]['name'] ?? '')
-                                );
-                            }
-                        }
-                    }
-                }
-            } catch (\Throwable) {
-                // Non-fatal — order migration already succeeded
-            }
+            // Language preference is not tracked per order in Magento.
 
             $run->refresh();
             $run->processed++;
@@ -592,7 +546,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
     }
 
     /**
-     * Upload Shopware order documents to Shopify Files and update order metafields/custom attributes.
+     * Upload Magento order invoices to Shopify Files and update order metafields/custom attributes.
      * Non-fatal — called from both the create path and the update path.
      */
     private function syncOrderDocuments(
@@ -605,15 +559,15 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
         string $sourceId
     ): void {
         $documents = data_get($order, 'documents', []);
-        if (!is_array($documents) || count($documents) === 0 || !$shop->shopwareConnection) {
+        if (!is_array($documents) || count($documents) === 0 || !$shop->magentoConnection) {
             return;
         }
 
         try {
             $docSync = app(ShopifyOrderDocumentSyncService::class);
-            $shopwareToken = app(ShopwareClient::class)->getAccessToken($shop->shopwareConnection);
+            $magentoToken = (string) ($shop->magentoConnection->access_token ?? '');
             $rawDocs = $mapper->extractDocumentsPublic($order);
-            $uploadedDocs = $docSync->uploadDocuments($shop, $rawDocs, $shopwareToken);
+            $uploadedDocs = $docSync->uploadDocuments($shop, $rawDocs, $magentoToken);
 
             foreach ($uploadedDocs as $doc) {
                 if (empty($doc['shopifyFileUrl']) && !empty($doc['downloadUrl'])) {
@@ -622,7 +576,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
                         'source_id'            => $sourceId,
                         'document_id'          => $doc['id'],
                         'document_type'        => $doc['typeName'],
-                        'shopware_download_url' => $doc['downloadUrl'],
+                        'magento_download_url' => $doc['downloadUrl'],
                     ]);
                 }
             }
@@ -639,7 +593,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
 
             $docsJson = json_encode(array_values($uploadedDocs), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
             if (is_string($docsJson)) {
-                $docMetafields[] = ['namespace' => 'shopware', 'key' => 'documents_json', 'type' => 'json', 'value' => $docsJson];
+                $docMetafields[] = ['namespace' => 'magento', 'key' => 'documents_json', 'type' => 'json', 'value' => $docsJson];
             }
 
             $docIndex = [];
@@ -653,7 +607,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
                 $suffix  = $docIndex[$typeKey] > 1 ? '_' . $docIndex[$typeKey] : '';
                 // Use fixed predictable key mapping — must match definitions in ensureOrderDocumentMetafieldDefinitions
                 $metaKey = $this->documentTypeToMetaKey($typeKey) . $suffix . '_url';
-                $docMetafields[] = ['namespace' => 'shopware_docs', 'key' => $metaKey, 'type' => 'url', 'value' => $fileUrl];
+                $docMetafields[] = ['namespace' => 'magento_docs', 'key' => $metaKey, 'type' => 'url', 'value' => $fileUrl];
             }
 
             if (count($docMetafields) > 0) {
@@ -671,7 +625,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
                 $typeName = (string) ($docs[0]['typeName'] ?? ucwords(str_replace('_', ' ', $typeKey)));
                 foreach ($docs as $i => $doc) {
                     $suffix   = count($docs) > 1 ? ' ' . ($i + 1) : '';
-                    $label    = 'Shopware ' . $typeName . $suffix;
+                    $label    = 'Magento ' . $typeName . $suffix;
                     $docNum   = (string) ($doc['documentNumber'] ?? '');
                     $date     = (string) ($doc['createdAt'] ?? '');
                     $datePart = $date !== '' ? ' (' . substr($date, 0, 10) . ')' : '';
@@ -706,7 +660,7 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
     }
 
     /**
-     * Map Shopware document typeKey to a fixed, predictable Shopify metafield key.
+     * Map Magento invoice typeKey to a fixed, predictable Shopify metafield key.
      * Keys must be ≤ 30 chars, lowercase, underscores only.
      * These MUST match the keys in ShopifyOrderSyncService::ensureOrderDocumentMetafieldDefinitions().
      */
@@ -757,8 +711,8 @@ class ProcessOrderMigrationItemJob implements ShouldQueue
         try {
             $writer = app(MigrationRunReportWriter::class);
             $writer->appendRow($run, [
-                'shopware_order_id' => (string) $item->source_id,
-                'order_number' => (string) ($this->order['orderNumber'] ?? ''),
+                'magento_order_id' => (string) $item->source_id,
+                'order_number' => (string) ($this->order['increment_id'] ?? ''),
                 'status' => $status,
                 'reason' => $status === 'failed'
                     ? $writer->humanizeFailureReason($item)

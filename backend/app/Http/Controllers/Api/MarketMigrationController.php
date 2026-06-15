@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Shop;
 use App\Services\Migration\MarketMigrationService;
 use App\Services\QueueHealthService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -23,23 +23,23 @@ class MarketMigrationController extends Controller
     {
         /** @var Shop $shop */
         $shop = $request->attributes->get('shop');
-        $conn = $shop ? $shop->shopwareConnection : null;
+        $conn = $shop ? $shop->magentoConnection : null;
 
         if (! $shop || ! $conn) {
-            return response()->json(['error' => 'Missing Shopware connection'], 422);
+            return response()->json(['error' => 'Missing Magento connection'], 422);
         }
 
         $validated = $request->validate([
-            'limit' => ['nullable', 'integer', 'min:1', 'max:20'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100'],
             'page' => ['nullable', 'integer', 'min:1', 'max:1000'],
         ]);
 
-        $limit = (int) ($validated['limit'] ?? 10);
+        $limit = (int) ($validated['limit'] ?? 100);
         $page = (int) ($validated['page'] ?? 1);
 
-        $shopware = app(ShopwareClient::class);
+        $magento = app(MagentoClient::class);
 
-        $channels = $shopware->getSalesChannelsWithDetails($conn);
+        $channels = $magento->getStoreViews($conn);
         $total = count($channels);
 
         $items = [];
@@ -47,27 +47,7 @@ class MarketMigrationController extends Controller
         $sliced = array_slice($channels, $offset, $limit);
 
         foreach ($sliced as $c) {
-            // Find proposed subfolder suffix
-            $extractedSuffix = null;
-            $swDomains = $c['domains'] ?? [];
-            foreach ($swDomains as $swd) {
-                $parsed = parse_url($swd['url']);
-                $path = trim($parsed['path'] ?? '', '/');
-                if (str_contains($path, 'public/')) {
-                    $parts = explode('public/', $path);
-                    $path = trim(end($parts), '/');
-                }
-                if ($path !== '') {
-                    $segments = explode('/', $path);
-                    $extractedSuffix = Str::slug(end($segments));
-                }
-            }
-
-            if (!$extractedSuffix) {
-                $extractedSuffix = Str::slug($c['name']);
-            }
-
-            $extractedSuffix = preg_replace('/[^a-z0-9-]/i', '', $extractedSuffix);
+            $extractedSuffix = preg_replace('/[^a-z0-9-]/i', '', strtolower($c['code']));
             if ($extractedSuffix === '') {
                 $extractedSuffix = 'market-' . substr(md5($c['name']), 0, 5);
             }
@@ -75,10 +55,10 @@ class MarketMigrationController extends Controller
             $items[] = [
                 'source_id' => $c['id'],
                 'name' => $c['name'],
-                'default_country' => $c['default_country_iso'] ?? 'None',
-                'default_locale' => $c['default_locale'] ?? 'en',
-                'countries' => count($c['countries']),
-                'domains' => count($c['domains']),
+                'default_country' => 'None',
+                'default_locale' => $c['locale'] ?? 'en-US',
+                'countries' => 1,
+                'domains' => 1,
                 'proposed_subfolder' => '/' . $extractedSuffix,
             ];
         }
@@ -136,8 +116,7 @@ class MarketMigrationController extends Controller
                 'duration_seconds' => $durationSeconds,
                 'report_available' => is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
                 'report_download_url' => '/api/migration/runs/' . $run->id . '/report',
-                'pdf_available' => in_array((string) $run->status, ['finished', 'cancelled'], true) && is_string($run->report_path) && trim((string) $run->report_path) !== '' && is_file((string) $run->report_path),
-                'pdf_download_url' => '/api/migration/runs/' . $run->id . '/report-pdf',
+
             ],
             'recent_failed_items' => $recentFailedOut,
         ]);
@@ -155,7 +134,16 @@ class MarketMigrationController extends Controller
             ], 409);
         }
 
-        $run = $this->service->start($shop);
+        $validated = $request->validate([
+            'channel_ids' => ['nullable', 'array'],
+            'channel_ids.*' => ['string'],
+        ]);
+
+        $channelIds = isset($validated['channel_ids']) && is_array($validated['channel_ids'])
+            ? array_values(array_filter(array_map('trim', $validated['channel_ids'])))
+            : null;
+
+        $run = $this->service->start($shop, $channelIds);
 
         return response()->json([
             'run_id' => $run->id,

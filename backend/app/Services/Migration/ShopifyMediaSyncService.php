@@ -101,7 +101,7 @@ GQL;
     /**
      * @return array{created: int, appended: int, errors?: mixed, userErrors?: array<int, mixed>}
      */
-    public function syncProductAndVariantImages(Shop $shop, string $productGid, string $shopwareBaseUrl, array $parent, array $children, ?array $variantIdByShopwareId = null): array
+    public function syncProductAndVariantImages(Shop $shop, string $productGid, string $magentoBaseUrl, array $parent, array $children, ?array $variantIdByMagentoId = null): array
     {
         \Illuminate\Support\Facades\Log::info('Starting media sync', [
             'shop' => $shop->shop_domain,
@@ -109,21 +109,22 @@ GQL;
             'sw_id' => $parent['id'] ?? 'unknown'
         ]);
 
-        if (count($children) > 0 && ($variantIdByShopwareId === null || count($variantIdByShopwareId) === 0)) {
+        if (count($children) > 0 && ($variantIdByMagentoId === null || count($variantIdByMagentoId) === 0)) {
             $variantMap = $this->fetchShopifyVariantMap($shop, $productGid);
             if (isset($variantMap['errors'])) {
                 return ['created' => 0, 'appended' => 0, 'errors' => $variantMap['errors']];
             }
 
-            /** @var array<string, string> $variantIdByShopwareId */
-            $variantIdByShopwareId = $variantMap['variantIdByShopwareId'] ?? [];
+            /** @var array<string, string> $variantIdByMagentoId */
+            $variantIdByMagentoId = $variantMap['variantIdByMagentoId'] ?? [];
         }
 
-        $shopwareBaseUrl = rtrim($shopwareBaseUrl, '/');
-        $productUrls = $this->collectProductImageUrls($shopwareBaseUrl, $parent);
+        $magentoBaseUrl = rtrim($magentoBaseUrl, '/');
+        $productUrls = $this->collectProductImageUrls($magentoBaseUrl, $parent);
 
         // Collect variant images: map of variantId => [imageUrls...]
-        $variantImagesByShopwareId = $this->collectVariantImageUrls($shopwareBaseUrl, $children);
+        // Pass parent for configuratorSettings option-image mapping
+        $variantImagesByMagentoId = $this->collectVariantImageUrls($magentoBaseUrl, $children, $parent);
 
         // Collect ALL variant image URLs (not just first per variant)
         $allUrls = [];
@@ -131,7 +132,7 @@ GQL;
             $allUrls[$u] = true;
         }
         // Add ALL variant images, not just one per variant
-        foreach ($variantImagesByShopwareId as $swVariantId => $imageUrls) {
+        foreach ($variantImagesByMagentoId as $mageVariantId => $imageUrls) {
             foreach ($imageUrls as $u) {
                 $allUrls[$u] = true;
             }
@@ -176,32 +177,41 @@ GQL;
             ]);
         }
 
-        // Associate ALL variant images with their variants (not just one per variant)
+        // Associate ALL variant images with their variants.
+        // Shopify rules for productVariantAppendMedia:
+        //  - Each variant may appear only ONCE in the variantMedia array
+        //  - Each entry takes mediaIds: [ID!]! (array, but only one item per variant in practice)
         $appendPairs = [];
-        foreach ($variantImagesByShopwareId as $swVariantId => $imageUrls) {
-            $shopifyVariantId = $variantIdByShopwareId[$swVariantId] ?? null;
+        $mediaIdsByVariant = [];
+
+        foreach ($variantImagesByMagentoId as $mageVariantId => $imageUrls) {
+            $shopifyVariantId = $variantIdByMagentoId[$mageVariantId] ?? null;
             if (!$shopifyVariantId) {
                 continue;
             }
-            
-            // Collect all media IDs for this variant
-            $mediaIds = [];
             foreach ($imageUrls as $url) {
                 $mediaId = $urlToMediaId[$url] ?? null;
                 if ($mediaId) {
-                    $mediaIds[] = $mediaId;
+                    $mediaIdsByVariant[$shopifyVariantId][] = $mediaId;
                 }
             }
-            
-            // Associate all images with this variant
-            if (count($mediaIds) > 0) {
-                $appendPairs[] = ['variantId' => $shopifyVariantId, 'mediaIds' => $mediaIds];
-            }
+        }
+
+        // One entry per variant with its first (primary) mediaId
+        foreach ($mediaIdsByVariant as $shopifyVariantId => $mediaIds) {
+            $uniqueIds = array_values(array_unique($mediaIds));
+            $appendPairs[] = ['variantId' => $shopifyVariantId, 'mediaIds' => [$uniqueIds[0]]];
         }
 
         $appended = 0;
         if (count($appendPairs) > 0) {
+            // Wait for all variant media to be READY before associating.
+            // Shopify processes images asynchronously; attaching non-ready media fails.
+            $variantMediaIds = array_map(fn($p) => $p['mediaIds'][0], $appendPairs);
+            $this->waitForMediaReady($shop, $productGid, $variantMediaIds);
+
             $append = $this->appendVariantMedia($shop, $productGid, $appendPairs);
+
             if (isset($append['errors'])) {
                 return ['created' => $created, 'appended' => $appended, 'errors' => $append['errors'], 'userErrors' => $allUserErrors];
             }
@@ -209,6 +219,19 @@ GQL;
             $userErrors = $append['userErrors'] ?? [];
             if (is_array($userErrors) && count($userErrors) > 0) {
                 foreach ($userErrors as $ue) {
+                    // Retry once more if still non-ready (race condition on slow stores)
+                    if (str_contains((string) ($ue['message'] ?? ''), 'Non-ready media')) {
+                        sleep(3);
+                        $retry = $this->appendVariantMedia($shop, $productGid, $appendPairs);
+                        if (!isset($retry['errors'])) {
+                            $retryErrors = $retry['userErrors'] ?? [];
+                            foreach (is_array($retryErrors) ? $retryErrors : [] as $rue) {
+                                $allUserErrors[] = $rue;
+                            }
+                            $appended = count($appendPairs);
+                            break;
+                        }
+                    }
                     $allUserErrors[] = $ue;
                 }
             }
@@ -224,7 +247,7 @@ GQL;
     }
 
     /**
-     * @return array{variantIdByShopwareId: array<string, string>, errors?: mixed}
+     * @return array{variantIdByMagentoId: array<string, string>, errors?: mixed}
      */
     private function fetchShopifyVariantMap(Shop $shop, string $productGid): array
     {
@@ -234,7 +257,7 @@ query VariantMap($id: ID!) {
     variants(first: 100) {
       nodes {
         id
-        metafield(namespace: "shopware", key: "variant_id") {
+        metafield(namespace: "magento", key: "variant_id") {
           value
         }
       }
@@ -245,7 +268,7 @@ GQL;
 
         $res = $this->client->query($shop, $query, ['id' => $productGid]);
         if (isset($res['errors'])) {
-            return ['variantIdByShopwareId' => [], 'errors' => $res['errors']];
+            return ['variantIdByMagentoId' => [], 'errors' => $res['errors']];
         }
 
         $nodes = data_get($res, 'data.product.variants.nodes', []);
@@ -260,7 +283,7 @@ GQL;
             }
         }
 
-        return ['variantIdByShopwareId' => $map];
+        return ['variantIdByMagentoId' => $map];
     }
 
     private function createMediaBatchFromUrls(Shop $shop, string $productGid, array $urls): array
@@ -292,24 +315,61 @@ GQL;
 
         // Filter to only URLs that passed HEAD check
         $validUrls = [];
+        $failedUrlsToRetry = [];
         foreach ($normalizedUrls as $origUrl => $normUrl) {
             $result = $headResults[$origUrl] ?? null;
-            if ($result === null || $result['state'] !== 'fulfilled') {
-                $reason = $result['reason'] ?? null;
+            $failed = ($result === null || $result['state'] !== 'fulfilled');
+            if (!$failed) {
+                $headStatus = $result['value']->getStatusCode();
+                if ($headStatus < 200 || $headStatus >= 300) {
+                    $failed = true;
+                }
+            }
+
+            if ($failed) {
+                if (str_contains($normUrl, '/pub/media/')) {
+                    $failedUrlsToRetry[$origUrl] = str_replace('/pub/media/', '/media/', $normUrl);
+                    continue;
+                }
+
+                $reason = $result ? ($result['reason'] ?? null) : null;
                 $errMsg = $reason instanceof \Throwable ? $reason->getMessage() : 'HEAD request failed';
                 \Illuminate\Support\Facades\Log::warning('Download skipped (HEAD failed)', ['url' => $origUrl, 'error' => $errMsg]);
                 $allUserErrors[] = ['message' => 'Source image URL unreachable', 'url' => $origUrl];
                 continue;
             }
 
-            $headStatus = $result['value']->getStatusCode();
-            if ($headStatus < 200 || $headStatus >= 300) {
-                \Illuminate\Support\Facades\Log::warning('Download failed', ['url' => $origUrl, 'status' => $headStatus]);
-                $allUserErrors[] = ['message' => 'Source image URL returned HTTP '.$headStatus, 'url' => $origUrl];
-                continue;
-            }
-
             $validUrls[$origUrl] = $normUrl;
+        }
+
+        // Retry failed URLs with /media/ instead of /pub/media/ in parallel
+        if (count($failedUrlsToRetry) > 0) {
+            $retryPromises = [];
+            foreach ($failedUrlsToRetry as $origUrl => $retryUrl) {
+                $retryPromises[$origUrl] = $this->http->headAsync($retryUrl, ['timeout' => 5, 'connect_timeout' => 3]);
+            }
+            $retryResults = \GuzzleHttp\Promise\Utils::settle($retryPromises)->wait();
+
+            foreach ($failedUrlsToRetry as $origUrl => $retryUrl) {
+                $result = $retryResults[$origUrl] ?? null;
+                $failed = ($result === null || $result['state'] !== 'fulfilled');
+                if (!$failed) {
+                    $headStatus = $result['value']->getStatusCode();
+                    if ($headStatus < 200 || $headStatus >= 300) {
+                        $failed = true;
+                    }
+                }
+
+                if ($failed) {
+                    $reason = $result ? ($result['reason'] ?? null) : null;
+                    $errMsg = $reason instanceof \Throwable ? $reason->getMessage() : 'HEAD request failed';
+                    \Illuminate\Support\Facades\Log::warning('Download skipped (HEAD fallback failed)', ['url' => $origUrl, 'error' => $errMsg]);
+                    $allUserErrors[] = ['message' => 'Source image URL unreachable', 'url' => $origUrl];
+                    continue;
+                }
+
+                $validUrls[$origUrl] = $retryUrl;
+            }
         }
 
         if (count($validUrls) === 0) {
@@ -848,35 +908,57 @@ GQL;
     {
         // HEAD check first — skip immediately if URL is not reachable or returns non-200.
         // This avoids wasting time downloading large files that will ultimately fail.
+        $finalUrl = $url;
         try {
-            $head = $this->http->head($url, ['timeout' => 5, 'connect_timeout' => 3]);
+            $head = $this->http->head($finalUrl, ['timeout' => 5, 'connect_timeout' => 3]);
             $headStatus = $head->getStatusCode();
             if ($headStatus < 200 || $headStatus >= 300) {
-                \Illuminate\Support\Facades\Log::warning('Download failed', ['url' => $url, 'status' => $headStatus]);
+                if (str_contains($url, '/pub/media/')) {
+                    $fallbackUrl = str_replace('/pub/media/', '/media/', $url);
+                    try {
+                        $fallbackHead = $this->http->head($fallbackUrl, ['timeout' => 5, 'connect_timeout' => 3]);
+                        if ($fallbackHead->getStatusCode() >= 200 && $fallbackHead->getStatusCode() < 300) {
+                            $finalUrl = $fallbackUrl;
+                            goto proceed_download;
+                        }
+                    } catch (\Exception $fe) {}
+                }
+                \Illuminate\Support\Facades\Log::warning('Download failed', ['url' => $finalUrl, 'status' => $headStatus]);
                 return ['errors' => [['message' => 'Source image URL returned HTTP '.$headStatus]]];
             }
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning('Download skipped (HEAD failed)', ['url' => $url, 'error' => $e->getMessage()]);
+            if (str_contains($url, '/pub/media/')) {
+                $fallbackUrl = str_replace('/pub/media/', '/media/', $url);
+                try {
+                    $fallbackHead = $this->http->head($fallbackUrl, ['timeout' => 5, 'connect_timeout' => 3]);
+                    if ($fallbackHead->getStatusCode() >= 200 && $fallbackHead->getStatusCode() < 300) {
+                        $finalUrl = $fallbackUrl;
+                        goto proceed_download;
+                    }
+                } catch (\Exception $fe) {}
+            }
+            \Illuminate\Support\Facades\Log::warning('Download skipped (HEAD failed)', ['url' => $finalUrl, 'error' => $e->getMessage()]);
             return ['errors' => [['message' => 'Source image URL unreachable: '.$e->getMessage()]]];
         }
 
+        proceed_download:
         $tmp = tempnam(sys_get_temp_dir(), 'swimg_');
         if ($tmp === false) {
             return ['errors' => [['message' => 'Unable to create temp file']]];
         }
 
         try {
-            $res = $this->http->get($url, ['sink' => $tmp, 'timeout' => 30, 'connect_timeout' => 5]);
+            $res = $this->http->get($finalUrl, ['sink' => $tmp, 'timeout' => 30, 'connect_timeout' => 5]);
             $status = $res->getStatusCode();
             if ($status < 200 || $status >= 300) {
                 @unlink($tmp);
-                \Illuminate\Support\Facades\Log::warning('Download failed', ['url' => $url, 'status' => $status]);
+                \Illuminate\Support\Facades\Log::warning('Download failed', ['url' => $finalUrl, 'status' => $status]);
 
                 return ['errors' => [['message' => 'Source image URL returned HTTP '.$status]]];
             }
         } catch (\Exception $e) {
             @unlink($tmp);
-            \Illuminate\Support\Facades\Log::error('Download exception', ['url' => $url, 'error' => $e->getMessage()]);
+            \Illuminate\Support\Facades\Log::error('Download exception', ['url' => $finalUrl, 'error' => $e->getMessage()]);
             return ['errors' => [['message' => $e->getMessage()]]];
         }
 
@@ -970,6 +1052,80 @@ GQL;
     }
 
     /**
+     * Poll Shopify until all specified media IDs are in READY status.
+     * Max wait: 30 seconds (10 attempts × 3s). Non-ready media cannot be attached to variants.
+     *
+     * @param array<int, string> $mediaIds
+     */
+    private function waitForMediaReady(Shop $shop, string $productGid, array $mediaIds): void
+    {
+        if (count($mediaIds) === 0) {
+            return;
+        }
+
+        $query = <<<'GQL'
+query MediaStatus($id: ID!) {
+  product(id: $id) {
+    media(first: 50) {
+      nodes {
+        __typename
+        ... on MediaImage {
+          id
+          status
+        }
+      }
+    }
+  }
+}
+GQL;
+
+        $targetIds = array_fill_keys($mediaIds, true);
+        $maxAttempts = 10;
+
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
+            if ($attempt > 0) {
+                sleep(3);
+            }
+
+            $res = $this->client->query($shop, $query, ['id' => $productGid]);
+            if (isset($res['errors'])) {
+                break; // Can't poll — proceed anyway
+            }
+
+            $nodes = data_get($res, 'data.product.media.nodes', []);
+            $nodes = is_array($nodes) ? $nodes : [];
+
+            $pendingCount = 0;
+            foreach ($nodes as $node) {
+                $nodeId = (string) data_get($node, 'id', '');
+                if (!isset($targetIds[$nodeId])) {
+                    continue;
+                }
+                $status = strtoupper((string) data_get($node, 'status', ''));
+                if ($status !== 'READY') {
+                    $pendingCount++;
+                }
+            }
+
+            if ($pendingCount === 0) {
+                \Illuminate\Support\Facades\Log::info('All variant media ready', [
+                    'shop' => $shop->shop_domain,
+                    'product_gid' => $productGid,
+                    'attempts' => $attempt + 1,
+                ]);
+                return;
+            }
+
+            \Illuminate\Support\Facades\Log::info('Waiting for media to be ready', [
+                'shop' => $shop->shop_domain,
+                'product_gid' => $productGid,
+                'pending' => $pendingCount,
+                'attempt' => $attempt + 1,
+            ]);
+        }
+    }
+
+    /**
      * @param  array<int, array{variantId: string, mediaIds: array<int, string>}>  $variantMedia
      * @return array{userErrors?: array<int, mixed>, errors?: mixed}
      */
@@ -1004,108 +1160,62 @@ GQL;
     /**
      * @return array<int, string>
      */
-    private function collectProductImageUrls(string $shopwareBaseUrl, array $product): array
+    private function collectProductImageUrls(string $apiBaseUrl, array $product): array
     {
         $urls = [];
-
-        $cover = $this->firstCoverUrl($shopwareBaseUrl, $product);
-        if ($cover !== null) {
-            $urls[$cover] = true;
-        }
-
-        $media = data_get($product, 'media', []);
-        if (is_array($media)) {
-            foreach ($media as $m) {
-                $url = data_get($m, 'media.url');
-                if (is_string($url) && $url !== '') {
-                    $abs = $this->normalizeShopwareUrl($shopwareBaseUrl, $url);
-                    if ($abs !== null) {
-                        $urls[$abs] = true;
-                    }
-                }
+        $entries = $product['media_gallery_entries'] ?? [];
+        foreach ($entries as $entry) {
+            if (($entry['media_type'] ?? '') !== 'image' || ($entry['disabled'] ?? false)) {
+                continue;
+            }
+            $file = $entry['file'] ?? '';
+            if ($file === '') {
+                continue;
+            }
+            $abs = $this->buildMagentoMediaUrl($apiBaseUrl, $file);
+            if ($abs !== null) {
+                $urls[$abs] = true;
             }
         }
-
         return array_values(array_keys($urls));
     }
 
-    private function firstCoverUrl(string $shopwareBaseUrl, array $product): ?string
+    private function buildMagentoMediaUrl(string $apiBaseUrl, string $file): ?string
     {
-        $url = data_get($product, 'cover.media.url');
-        if (is_string($url) && $url !== '') {
-            return $this->normalizeShopwareUrl($shopwareBaseUrl, $url);
-        }
-
-        return null;
+        $apiBaseUrl = rtrim($apiBaseUrl, '/');
+        $file = '/' . ltrim($file, '/');
+        return $apiBaseUrl . '/pub/media/catalog/product' . $file;
     }
 
     /**
-     * Collect all image URLs from a variant (cover + all media).
-     * Returns array mapping of variant ID to array of URLs for that variant.
-     *
-     * @param string $shopwareBaseUrl
-     * @param array<int, array<string, mixed>> $children
-     * @return array<string, array<int, string>> Map of variantId => [urls...]
+     * Collect all image URLs for each variant.
      */
-    private function collectVariantImageUrls(string $shopwareBaseUrl, array $children): array
+    private function collectVariantImageUrls(string $apiBaseUrl, array $children, array $parent = []): array
     {
         $variantImages = [];
-
-        foreach ($children as $variant) {
-            if (!is_array($variant)) {
-                continue;
-            }
-
-            $variantId = (string) ($variant['id'] ?? '');
-            if ($variantId === '') {
+        foreach ($children as $child) {
+            $childId = (string) ($child['id'] ?? '');
+            if ($childId === '') {
                 continue;
             }
 
             $urls = [];
-
-            // Collect variant cover image
-            $cover = $this->firstCoverUrl($shopwareBaseUrl, $variant);
-            if ($cover !== null) {
-                $urls[$cover] = true;
-            }
-
-            // Collect all variant media images (not just cover)
-            $media = data_get($variant, 'media', []);
-            if (is_array($media)) {
-                foreach ($media as $m) {
-                    $url = data_get($m, 'media.url');
-                    if (is_string($url) && $url !== '') {
-                        $abs = $this->normalizeShopwareUrl($shopwareBaseUrl, $url);
-                        if ($abs !== null) {
-                            $urls[$abs] = true;
-                        }
-                    }
+            $entries = $child['media_gallery_entries'] ?? [];
+            foreach ($entries as $entry) {
+                if (($entry['media_type'] ?? '') !== 'image' || ($entry['disabled'] ?? false)) {
+                    continue;
+                }
+                $file = $entry['file'] ?? '';
+                if ($file === '') {
+                    continue;
+                }
+                $abs = $this->buildMagentoMediaUrl($apiBaseUrl, $file);
+                if ($abs !== null) {
+                    $urls[$abs] = true;
                 }
             }
-
-            if (count($urls) > 0) {
-                $variantImages[$variantId] = array_values(array_keys($urls));
-            }
+            $variantImages[$childId] = array_values(array_keys($urls));
         }
-
         return $variantImages;
-    }
-
-    private function normalizeShopwareUrl(string $baseUrl, string $url): ?string
-    {
-        $url = trim($url);
-        if ($url === '') {
-            return null;
-        }
-
-        if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://')) {
-            return $url;
-        }
-
-        if (str_starts_with($url, '/')) {
-            return $baseUrl.$url;
-        }
-
-        return $baseUrl.'/'.$url;
     }
 }

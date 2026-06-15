@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\MigrationRun;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -22,14 +22,18 @@ class RunMarketMigrationJob implements ShouldQueue
 
     private int $runId;
 
-    public function __construct(int $runId)
+    /** @var string[]|null */
+    private ?array $channelIds;
+
+    public function __construct(int $runId, ?array $channelIds = null)
     {
         $this->runId = $runId;
+        $this->channelIds = $channelIds;
     }
 
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run) {
             return;
         }
@@ -40,7 +44,7 @@ class RunMarketMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (! $shop || ! $conn) {
                 $run->status = 'failed';
@@ -53,14 +57,22 @@ class RunMarketMigrationJob implements ShouldQueue
             $run->status = 'running';
             $run->save();
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
 
             $run->refresh();
             if ($run->status === 'cancelled') {
                 return;
             }
 
-            $channels = $shopware->getSalesChannelsWithDetails($conn);
+            $channels = $magento->getStoreViews($conn);
+
+            // Apply channel ID filter if provided
+            if (is_array($this->channelIds) && count($this->channelIds) > 0) {
+                $allowedIds = array_flip($this->channelIds);
+                $channels = array_values(array_filter($channels, function ($c) use ($allowedIds) {
+                    return isset($allowedIds[trim((string) ($c['id'] ?? ''))]);
+                }));
+            }
 
             if (empty($channels)) {
                 FinalizeMarketMigrationRunJob::dispatch($run->id)->delay(now()->addSeconds(2));

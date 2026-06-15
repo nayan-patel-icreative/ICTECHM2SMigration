@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Models\MigrationRun;
 use App\Services\Migration\ShopifyProductSyncService;
-use App\Services\Shopware\ShopwareClient;
+use App\Services\Magento\MagentoClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -43,7 +43,7 @@ class RunProductMigrationJob implements ShouldQueue
      */
     public function handle(): void
     {
-        $run = MigrationRun::query()->with('shop.shopwareConnection')->find($this->runId);
+        $run = MigrationRun::query()->with('shop.magentoConnection')->find($this->runId);
         if (! $run) {
             return;
         }
@@ -54,7 +54,7 @@ class RunProductMigrationJob implements ShouldQueue
 
         try {
             $shop = $run->shop;
-            $conn = $shop ? $shop->shopwareConnection : null;
+            $conn = $shop ? $shop->magentoConnection : null;
 
             if (! $shop || ! $conn) {
                 $run->status = 'failed';
@@ -92,7 +92,7 @@ class RunProductMigrationJob implements ShouldQueue
                 }
             }
 
-            $shopware = app(ShopwareClient::class);
+            $magento = app(MagentoClient::class);
 
             // Increase page size to dispatch more product work items per run page.
             $perPage = 200;
@@ -102,20 +102,7 @@ class RunProductMigrationJob implements ShouldQueue
                 return;
             }
 
-            // --- Sales Channel scoping (multi-store support) ---
-            // If the connection is scoped to a specific Sales Channel, restrict the product search
-            // to only products that have a visibility entry for that channel.
-            $scopedFilter = $this->filter;
-            $salesChannelId = trim((string) ($conn->sales_channel_id ?? ''));
-            if ($salesChannelId !== '') {
-                $scopedFilter[] = [
-                    'type'  => 'equals',
-                    'field' => 'visibilities.salesChannelId',
-                    'value' => $salesChannelId,
-                ];
-            }
-
-            $res = $shopware->searchProducts($conn, $perPage, $this->page, $scopedFilter);
+            $res = $magento->searchProducts($conn, $perPage, $this->page, $this->filter);
             $products = $res['products'] ?? [];
             $total = (int) ($res['total'] ?? 0);
 
@@ -127,11 +114,11 @@ class RunProductMigrationJob implements ShouldQueue
             }
 
             $parents = array_values(array_filter($products, function ($p) {
-                return empty($p['parentId']);
+                return ($p['visibility'] ?? 4) !== 1;
             }));
 
             foreach ($parents as $p) {
-                $sourceId = (string) ($p['id'] ?? '');
+                $sourceId = (string) ($p['sku'] ?? '');
                 $sourceId = trim($sourceId);
                 if ($sourceId === '') {
                     continue;
